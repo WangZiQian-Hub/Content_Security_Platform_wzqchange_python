@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useDataResourceStore } from '../../../stores/data-resource'
 import type { IngestTask } from '../../../types/data-resource'
 import { TASK_STATUS } from '../../../utils/enums'
+import { formatStorage } from '../../../utils/file-size'
 const props = defineProps<{ compact?: boolean }>()
 const emit = defineEmits<{ select: [task: IngestTask] }>()
 const store = useDataResourceStore()
@@ -92,8 +93,8 @@ onUnmounted(stopPolling)
   >
     <el-table-column prop="name" label="任务名称" min-width="170" />
     <el-table-column prop="sourceName" label="数据源" min-width="100" />
-    <el-table-column v-if="compact" label="数据量" width="110"
-      ><template #default="{ row }">{{ row.storageGb }} GB</template></el-table-column
+    <el-table-column v-if="compact" label="本次数据量" width="110"
+      ><template #default="{ row }">{{ formatStorage(row.storageGb) }}</template></el-table-column
     >
     <el-table-column v-else prop="datasetName" label="目标数据集" min-width="190" />
     <el-table-column v-if="!compact" label="接入进度" min-width="160"
@@ -102,7 +103,12 @@ onUnmounted(stopPolling)
     ></el-table-column>
     <el-table-column label="状态" width="90"
       ><template #default="{ row }: { row: IngestTask }"
-        ><el-tag :type="TASK_STATUS[row.status].color" round size="small">{{
+        ><el-tooltip
+          v-if="row.status === 'failed'"
+          :content="row.result?.error ?? '未提供失败原因'"
+          placement="top"
+        ><el-tag :type="TASK_STATUS[row.status].color" round size="small">失败</el-tag></el-tooltip
+        ><el-tag v-else :type="TASK_STATUS[row.status].color" round size="small">{{
           row.status === 'pending' ? '等待执行' : TASK_STATUS[row.status].label
         }}</el-tag></template
       ></el-table-column
@@ -134,6 +140,8 @@ onUnmounted(stopPolling)
       ><el-descriptions-item label="状态">{{
         detail.status === 'pending' ? '等待执行' : TASK_STATUS[detail.status].label
       }}</el-descriptions-item
+      ><el-descriptions-item label="失败原因">{{ detail.result?.error ?? '—' }}</el-descriptions-item
+      ><el-descriptions-item label="统计口径">{{ detail.result?.statistics?.basis ?? '—' }}</el-descriptions-item
       ><el-descriptions-item label="链路 ID">{{
         detail.traceId
       }}</el-descriptions-item></el-descriptions

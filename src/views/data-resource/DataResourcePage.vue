@@ -7,8 +7,12 @@ import AppIcon from '../../components/AppIcon.vue'
 import { useDataResourceStore } from '../../stores/data-resource'
 import type { ResourceView } from '../../types/data-resource'
 import { formatResourceComparison, resourceComparisonTitle, resourceComparisonTone } from '../../utils/resource-comparison'
+import { formatStorage } from '../../utils/file-size'
 const route = useRoute()
 const store = useDataResourceStore()
+function formatValue(value: number) {
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 10 }).format(value)
+}
 onMounted(() => store.loadOptions())
 const view = computed(() => String(route.name).replace('resource-', '') as ResourceView)
 // 资源卡片直接使用当前 summary 快照，与图表和导出保持同一口径。
@@ -38,6 +42,10 @@ watch(
       comparison-label="较前日"
       :hide-mini-bars-without-comparison="hideMiniBarsWithoutComparison"
     >
+      <template #value="{ item }">
+        <template v-if="item.id === 'storage'">{{ formatStorage(item.value) }}</template>
+        <template v-else>{{ item.displayValue ?? formatValue(item.value) }} <small>{{ item.unit }}</small></template>
+      </template>
       <template #comparison="{ item }">
         <p
           :class="resourceComparisonTone(item.comparison)"
@@ -61,6 +69,12 @@ watch(
       <el-button link type="primary" @click="store.loadSummary(view)">重新加载</el-button>
     </el-alert>
     <el-alert v-if="store.optionsError" :title="store.optionsError" type="error" :closable="false"><el-button link @click="store.loadOptions">重试</el-button></el-alert>
-    <div v-loading="store.loading" class="resource-page-body"><router-view /></div>
+    <div v-loading="store.loading" class="resource-page-body">
+      <router-view v-slot="{ Component }">
+        <Transition name="page-fade">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
+    </div>
   </div>
 </template>

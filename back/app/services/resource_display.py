@@ -41,19 +41,8 @@ def normalize_source_name(value: object | None) -> str | None:
 
 
 def task_display_defaults(task_id: str) -> tuple[str, float]:
-    randomizer = _random_for(f"task:{task_id}")
-    source_name = SOURCE_NAMES[randomizer.randrange(len(SOURCE_NAMES))]
-    low, high = SOURCE_RANGES_GB[source_name]
-    return source_name, round(randomizer.uniform(low, high), 1)
-
-
-def task_ingest_statistics(task_id: str, storage_gb: float) -> tuple[int, int, int]:
-    """按接入容量生成合理的成功、重复和异常记录数。"""
-    randomizer = _random_for(f"ingest-statistics:{task_id}")
-    success_count = max(1000, int(storage_gb * randomizer.uniform(28, 52)))
-    duplicate_count = max(1, int(success_count * randomizer.uniform(0.005, 0.025)))
-    anomaly_count = max(1, int(success_count * randomizer.uniform(0.001, 0.008)))
-    return success_count, duplicate_count, anomaly_count
+    """Compatibility helper for old callers; never invents task capacity."""
+    return "未填写来源", 0.0
 
 
 def task_dataset_default(task_id: str) -> str:
@@ -68,15 +57,12 @@ def task_dataset_default(task_id: str) -> str:
     return datasets[_random_for(f"task-dataset:{task_id}").randrange(len(datasets))]
 
 
-def dataset_storage_default(dataset_key: str) -> float:
-    """生成 0.3–2.0 TB 的单数据集展示容量。"""
-    return round(_random_for(f"dataset:{dataset_key}").uniform(320, 2000), 1)
-
-
 def dataset_display_defaults(dataset_key: str, storage_gb: float | None = None) -> tuple[float, int, float]:
     """返回数据集页面使用的存储量、记录数和质量分。"""
     randomizer = _random_for(f"dataset-display:{dataset_key}")
-    storage = round(storage_gb or randomizer.uniform(320, 2000), 1)
+    # Storage is always supplied by a real ingest task. Never invent capacity
+    # for a dataset during display/seed initialization.
+    storage = max(0.0, float(storage_gb or 0))
     records = max(800, int(storage * randomizer.uniform(18_000, 42_000)))
     quality_score = round(randomizer.uniform(86, 98.5), 1)
     return storage, records, quality_score

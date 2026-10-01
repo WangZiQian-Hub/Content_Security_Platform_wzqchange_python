@@ -14,8 +14,8 @@ ALLOWED_EXTENSIONS = {
     ".txt",
     ".csv",
     ".json",
+    ".jsonl",
     ".xlsx",
-    ".pdf",
 }
 
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024
@@ -34,7 +34,7 @@ async def upload_file(file: UploadFile = File(...)):
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="只支持 TXT、CSV、JSON、XLSX、PDF 文件",
+            detail="只支持 TXT、CSV、JSON、JSONL、XLSX 文件",
         )
 
     file_id = f"file_{uuid4().hex}"

@@ -153,7 +153,12 @@ function openUserManagement() {
           {{ tab.title }}
         </router-link>
       </nav>
-      <router-view /><CapabilityDock v-if="!['/data-resource', '/data-governance', '/model-train', '/compliance', '/evaluation'].includes(current.path)" />
+      <router-view v-slot="{ Component }">
+        <Transition name="page-fade">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
+      <CapabilityDock v-if="!['/data-resource', '/data-governance', '/model-train', '/compliance', '/evaluation'].includes(current.path)" />
       <footer class="page-footer">
         内容安全治理原型平台 <span>统一数据 · 智能治理 · 全程可溯</span>
       </footer>

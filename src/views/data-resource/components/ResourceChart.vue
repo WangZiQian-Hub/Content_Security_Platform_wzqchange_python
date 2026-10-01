@@ -19,6 +19,23 @@ const element = ref<HTMLDivElement>()
 let chart: ECharts | undefined
 let observer: ResizeObserver | undefined
 let disposed = false
+type TrendUnit = 'GB' | 'MB' | 'KB'
+
+function trendDisplay(values: number[]): { unit: TrendUnit; factor: number } {
+  const maximum = Math.max(0, ...values.filter((value) => Number.isFinite(value) && value >= 0))
+  if (maximum <= 0) return { unit: 'KB', factor: 1024 * 1024 }
+  const exponent = Math.floor(Math.log10(maximum))
+  if (exponent >= 0) return { unit: 'GB', factor: 1 }
+  if (exponent >= -4) return { unit: 'MB', factor: 1024 }
+  return { unit: 'KB', factor: 1024 * 1024 }
+}
+
+function formatTrendValue(value: unknown, unit: TrendUnit, factor: number): string {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return '0.00'
+  return (Math.max(0, numericValue) * factor).toFixed(2)
+}
+
 function option(): EChartsOption {
   const common = { color: ['#087bff', '#08c592', '#ffab40', '#9861ff', '#63a8ff'], tooltip: {textStyle: {fontSize: 18, },} }
   if (props.kind === 'donut')
@@ -97,9 +114,18 @@ function option(): EChartsOption {
         },
       ],
     }
+  const trendValues = props.trend?.added ?? []
+  const trendDisplayUnit = trendDisplay(trendValues)
+  const trendData = trendValues.map((value) => value * trendDisplayUnit.factor)
+  const formatDisplayed = (value: unknown) => formatTrendValue(value, trendDisplayUnit.unit, 1)
   return {
     ...common,
-    tooltip: { trigger: 'axis',axisPointer: {type: 'line', snap: true,}, textStyle: {fontSize: 17,},},
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line', snap: true },
+      textStyle: { fontSize: 17 },
+      valueFormatter: (value: unknown) => `${formatDisplayed(value)} ${trendDisplayUnit.unit}`,
+    },
     legend: { top: -3, right: 8, textStyle: { color: '#334e78', fontSize: 16, },},
     grid: { left: 48, right: 24, bottom: 28, top: 42 },
     xAxis: {
@@ -111,31 +137,35 @@ function option(): EChartsOption {
     },
     yAxis: {
       type: 'value',
-      name: '数据量（GB）',
+      name: `接入任务数据量（${trendDisplayUnit.unit}）`,
       nameTextStyle: { color: '#647ea5', fontSize: 15, fontWeight: 400,},
       splitLine: { lineStyle: { color: '#edf3fb' } },
-      axisLabel: { color: '#647ea5', fontSize: 13.5, },
+      axisLabel: {
+        color: '#647ea5',
+        fontSize: 13.5,
+        formatter: (value: number) => formatDisplayed(value),
+      },
     },
     series: [
       {
-        name: '新增数据量',
+        name: '接入任务数据量',
         type: 'line',
-        data: props.trend?.added,
+        data: trendData,
         symbolSize: 7,
         areaStyle: { opacity: 0.14 },
-        label: { show: !props.cumulative, position: 'top', color: '#183d7b', fontSize: 13.5,},
+        label: {
+          show: !props.cumulative,
+          position: 'top',
+          color: '#183d7b',
+          fontSize: 13.5,
+          formatter: (params: unknown) => {
+            const value = params && typeof params === 'object' && 'value' in params
+              ? params.value
+              : 0
+            return `${formatDisplayed(value)} ${trendDisplayUnit.unit}`
+          },
+        },
       },
-      ...(props.cumulative
-        ? [
-            {
-              name: '累计数据量',
-              type: 'line' as const,
-              data: props.trend?.total,
-              symbolSize: 7,
-              areaStyle: { opacity: 0.15 },
-            },
-          ]
-        : []),
     ],
   }
 }
@@ -164,7 +194,7 @@ onUnmounted(() => {
     :style="{ height: `${height}px`, width: '100%' }"
     role="img"
     :aria-label="
-      kind === 'line' ? '数据接入趋势图' : kind === 'donut' ? '数据占比分布图' : '数据质量雷达图'
+      kind === 'line' ? '接入任务数据量图' : kind === 'donut' ? '数据占比分布图' : '数据质量雷达图'
     "
   />
 </template>

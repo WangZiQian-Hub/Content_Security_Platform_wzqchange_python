@@ -8,6 +8,8 @@ import DatasetDetailContent from './components/DatasetDetailContent.vue'
 import { useDataResourceStore } from '../../stores/data-resource'
 import { isMock } from '../../api/request'
 import type { DatasetQuery, ResourceDataset } from '../../types/data-resource'
+import { formatStorage } from '../../utils/file-size'
+import { languageName } from '../../utils/governance-language'
 const store = useDataResourceStore()
 const router = useRouter()
 const query = reactive<DatasetQuery>({
@@ -33,7 +35,7 @@ const form = reactive({
   sourceType: 'business' as ResourceDataset['sourceType'],
   languages: ['zh'],
 })
-const languageNames = computed<Record<string, string>>(() => Object.fromEntries(store.filterOptions.languages.map(l => [l.code, l.name])))
+const languageNames = computed<Record<string, string>>(() => Object.fromEntries(store.filterOptions.languages.map(l => [l.code, languageName(l.code)])))
 const statusNames = { ready: '可用', processing: '处理中', uploading: '上传中', archived: '已归档' }
 async function load() {
   loading.value = true
@@ -115,7 +117,7 @@ async function removeDataset(row: ResourceDataset) {
   }
   try {
     await ElMessageBox.confirm(
-      `确定删除数据集“${row.name}”吗？删除后无法恢复，请确认其中的数据已不再需要。`,
+      `确定删除数据集“${row.name}”吗？删除后将一并删除该数据集的样本记录和接入任务，且无法恢复。`,
       '删除数据集',
       { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
     )
@@ -208,7 +210,7 @@ onMounted(load)
       >
       <el-table-column label="语言" min-width="100"
         ><template #default="{ row }: { row: ResourceDataset }">{{
-          row.languages.map((code) => languageNames[code] ?? code).join(' / ')
+          row.languages.map(languageName).join(' / ')
         }}</template></el-table-column
       >
       <el-table-column label="数据量" min-width="115"
@@ -216,8 +218,8 @@ onMounted(load)
           row.rowCount.toLocaleString()
         }}</template></el-table-column
       >
-      <el-table-column label="存储量" min-width="100"
-        ><template #default="{ row }">{{ row.storageGb }} GB</template></el-table-column
+      <el-table-column label="累计存储量" min-width="100"
+        ><template #default="{ row }">{{ formatStorage(row.storageGb) }}</template></el-table-column
       >
       <el-table-column prop="sourceName" label="数据来源" min-width="110" />
       <el-table-column prop="qualityScore" label="质量评分" width="120" sortable

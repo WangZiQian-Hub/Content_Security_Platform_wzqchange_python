@@ -104,6 +104,38 @@ def resource_summary(#参数全是前端的url请求里面的内容
                 .order_by(Task.created_at.asc())
             ).all()
         )
+        # Only completed ingests that carry parser statistics have a measured
+        # source size. Older/demo tasks were populated with display defaults;
+        # keeping them out prevents those values from creating fake spikes.
+        tasks = [
+            task
+            for task in tasks
+            if isinstance((task.result or {}).get("statistics"), dict)
+        ]
+        ingest_tasks_all = list(
+            db.scalars(select(Task).where(Task.capability_code == "data_ingest")).all()
+        )
+        # Usage is derived from task references, never from hand-maintained metadata.
+        usage_counts = {dataset.id: 0 for dataset in datasets}
+        for task in db.scalars(select(Task)).all():
+            # Ingest tasks create/populate a dataset; they are not dataset usage.
+            if task.capability_code == "data_ingest":
+                continue
+            references = [
+                (task.result or {}).get("dataset_id"),
+                (task.input_data or {}).get("dataset_id"),
+            ]
+            referenced_ids = {
+                int(value)
+                for value in references
+                if isinstance(value, (int, str))
+                and not isinstance(value, bool)
+                and str(value).strip().lower() != "null"
+                and str(value).strip().lstrip("+").isdigit()
+            }
+            for referenced_id in referenced_ids:
+                if referenced_id in usage_counts:
+                    usage_counts[referenced_id] += 1
         #如果调用接口时传了 dataset_id，就只保留 id 等于该值的数据集。
     if dataset_id is not None:
         datasets = [item for item in datasets if item.id == dataset_id]
@@ -113,6 +145,24 @@ def resource_summary(#参数全是前端的url请求里面的内容
         #只保留元数据中 source_type 列表包含指定语言的数据集
     if source_type:
         datasets = [item for item in datasets if item.source_type == source_type]
+
+    selected_dataset_ids = {item.id for item in datasets}
+    duplicate_total = 0
+    anomaly_total = 0
+    for task in ingest_tasks_all:
+        references = [
+            (task.result or {}).get("dataset_id"),
+            (task.input_data or {}).get("dataset_id"),
+        ]
+        if any(
+            isinstance(value, (int, str))
+            and not isinstance(value, bool)
+            and str(value).strip().lstrip("+").isdigit()
+            and int(value) in selected_dataset_ids
+            for value in references
+        ):
+            duplicate_total += int(task.duplicate_count or 0)
+            anomaly_total += int(task.anomaly_count or 0)
 
 
     #得到数据集的个数
@@ -175,31 +225,34 @@ def resource_summary(#参数全是前端的url请求里面的内容
     for task in tasks:
         if task.created_at:
             daily_amounts[task.created_at.date().isoformat()] += float(task.storage_gb or 0)
-    added = [round(daily_amounts[day], 1) for day in dates]
-    # 累计趋势使用 GB，与图表纵轴一致，并以当前数据集总容量为终点。
-    running_total = max(0.0, displayed_total_storage - sum(added))
+    # Keep enough precision for small file ingests; rounding to one GB would
+    # turn legitimate KB-sized uploads into a misleading zero.
+    added = [round(daily_amounts[day], 9) for day in dates]
+    # The trend answers a different question from the dataset total: it is
+    # daily measured ingest-task volume. Do not backfill a cumulative series
+    # from dataset storage, which would mix two incompatible measures.
     totals = []
-    for value in added:
-        running_total = round(running_total + value, 1)
-        totals.append(running_total)
-    if totals:
-        totals[-1] = round(displayed_total_storage, 1)
 
     quality_score = round(
         sum(float(_metadata(item).get("quality_score", 95.0) or 95.0) for item in datasets) / len(datasets),
         1,
     ) if datasets else 0
-    #生成一个“数据集排行榜”列表，按每个数据集的记录数（record_count）从多到少排序，
-    # 并提取名称、来源、存储量、使用次数、记录数占比等信息。
+    # 生成数据集使用排行榜：先按真实任务引用次数排序，再计算使用占比并截取前十名。
+    ranked_datasets = sorted(
+        datasets,
+        key=lambda item: usage_counts.get(item.id, 0),
+        reverse=True,
+    )[:10]
+    total_uses = sum(usage_counts.get(item.id, 0) for item in datasets)
     ranking = [
         {
             "name": item.name,
             "source": _metadata(item).get("source_name", "数据集"),
             "storageGb": float(_metadata(item).get("storage_gb", 0) or 0),
-            "uses": int(_metadata(item).get("uses", 0) or 0),
-            "share": round((int(_metadata(item).get("record_count", 0) or 0) / total_rows) * 100, 1) if total_rows else 0,
+            "uses": usage_counts.get(item.id, 0),
+            "share": round((usage_counts.get(item.id, 0) / total_uses) * 100, 1) if total_uses else 0,
         }
-        for item in sorted(datasets, key=lambda row: int(_metadata(row).get("record_count", 0) or 0), reverse=True)
+        for item in ranked_datasets
     ]
 
     kpis = [
@@ -218,7 +271,10 @@ def resource_summary(#参数全是前端的url请求里面的内容
         "languages": _distribution(languages, sum(languages.values())),
         "quality": quality_distribution,
         "qualityScore": quality_score,
-        "issues": [{"name": "待完善元数据", "value": sum(1 for item in datasets if not _metadata(item).get("languages"))}],
+        "issues": [
+            {"name": "重复样本总数", "value": duplicate_total},
+            {"name": "缺失样本总数", "value": anomaly_total},
+        ],
         "ranking": ranking,
     }
     return success(data=result, message=f"数据资源{view}汇总查询成功")

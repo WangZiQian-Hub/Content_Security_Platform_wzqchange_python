@@ -59,6 +59,10 @@ const icons = ['Coin', 'TrendCharts', 'Shield', 'WarningFilled', 'PieChart']
         </button>
       </template>
     </nav>
-    <router-view @anomaly-updated="anomalyRevision++" @risk-updated="riskRevision++" />
+    <router-view v-slot="{ Component }">
+      <Transition name="page-fade">
+        <component :is="Component" @anomaly-updated="anomalyRevision++" @risk-updated="riskRevision++" />
+      </Transition>
+    </router-view>
   </div>
 </template>

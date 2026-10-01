@@ -66,7 +66,11 @@ onUnmounted(() => {
     <el-alert v-if="store.error" :title="store.error" type="error" :closable="false"
       ><el-button @click="store.load">重新加载</el-button></el-alert
     >
-    <router-view v-else-if="store.loaded" />
+    <router-view v-else-if="store.loaded" v-slot="{ Component }">
+      <Transition name="page-fade">
+        <component :is="Component" />
+      </Transition>
+    </router-view>
     <p class="mw-footnote">
       {{
         isMock

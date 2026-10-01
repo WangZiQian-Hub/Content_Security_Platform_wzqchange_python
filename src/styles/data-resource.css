@@ -434,12 +434,12 @@
 }
 .resource-statistics-top {
   display: grid;
-  grid-template-columns: 1.35fr 1.1fr 0.9fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 .resource-statistics-bottom {
   display: grid;
-  grid-template-columns: 1fr 1.15fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 .resource-statistics-top .panel-content > p,
@@ -447,31 +447,6 @@
   font-size: 16px; /* 字体大小 */
   font-weight: 700;
   line-height: 1.8; /* 行距 */
-}
-.resource-quality {
-  display: flex;
-  align-items: center;
-}
-.resource-quality > div:first-child {
-  min-width: 0;
-  flex: 1;
-}
-.resource-quality > div:last-child {
-  width: 130px;
-  text-align: center;
-  background: #f4f9ff;
-  border-radius: 8px;
-  padding: 20px 12px;
-}
-.resource-quality b {
-  display: block;
-  font-size: 36px;
-  color: #087bff;
-  padding: 10px 0;
-}
-.resource-quality span {
-  font-size: 18px;
-  color: #5d78a2;
 }
 .resource-issue > span:first-of-type { font-size: 20px; font-weight: 700;} /* 重复数据等名称 */
 .resource-issue > b { font-size: 20px; }                  /* 12,680 等数字 */
@@ -518,4 +493,11 @@
   color: #8295b0;
   font-size: 12px;
   margin: 0 0 10px;
+}
+
+@media (max-width: 1100px) {
+  .resource-statistics-top,
+  .resource-statistics-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

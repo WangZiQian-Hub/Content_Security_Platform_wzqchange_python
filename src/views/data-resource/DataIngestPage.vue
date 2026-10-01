@@ -92,6 +92,13 @@ const form = reactive({
 const files = ref<UploadFiles>([])
 const datasetOptions = ref<ResourceDataset[]>([])
 const selectedDataset = ref<ResourceDataset>()
+function normalizeDatasetName(name: string) {
+  return name.replace(/\u3000/g, ' ').trim().replace(/\s+/g, ' ').toLocaleLowerCase()
+}
+function hasDuplicateDatasetName(dataset: ResourceDataset) {
+  const normalized = normalizeDatasetName(dataset.name)
+  return datasetOptions.value.filter((item) => normalizeDatasetName(item.name) === normalized).length > 1
+}
 const visibleDatasetOptions = computed(() =>
   selectedDataset.value &&
   !datasetOptions.value.some((item) => item.id === selectedDataset.value?.id)
@@ -139,7 +146,7 @@ function selectDataset(value: number | 'new') {
 const activeTask = computed(() => {
   // 左侧任务列表轮询刷新后，使用同一 taskId 的最新对象，右侧进度随之同步变化。
   if (current.value) return store.tasks.find((task) => task.taskId === current.value?.taskId) ?? current.value
-  return store.tasks.find((task) => task.status === 'running') ?? store.tasks[0]
+  return undefined
 })
 const stage = computed(() =>
   !activeTask.value
@@ -160,11 +167,11 @@ const stageNames = ['等待执行', '正在采集', '正在清洗', '正在检�
 function validateFile(file: UploadFile) {
   const extension = file.name.split('.').pop()?.toLowerCase()
   if (
-    !['txt', 'csv', 'json', 'xlsx', 'pdf'].includes(extension ?? '') ||
+    !['txt', 'csv', 'json', 'jsonl', 'xlsx'].includes(extension ?? '') ||
     (file.size ?? 0) > 2 * 1024 ** 3
   ) {
     files.value = files.value.filter((item) => item.uid !== file.uid)
-    ElMessage.warning('请选择 TXT、CSV、JSON、XLSX 或 PDF 文件，单个文件不超过 2GB')
+    ElMessage.warning('请选择 TXT、CSV、JSON、JSONL 或 XLSX 文件，单个文件不超过 2GB')
   }
 }
 async function submit() {
@@ -198,6 +205,15 @@ async function submit() {
   }
   busy.value = true
   try {
+    if (form.datasetTarget === 'new') {
+      const existing = await listDatasets({ page: 1, pageSize: 50, keyword: form.newDatasetName.trim() })
+      const normalizedName = normalizeDatasetName(form.newDatasetName)
+      const duplicate = existing.items.find((item) => normalizeDatasetName(item.name) === normalizedName)
+      if (duplicate) {
+        ElMessage.warning(`已存在同名数据集：${duplicate.name}，请改用已有数据集或更换名称`)
+        return
+      }
+    }
     const fileIds: string[] = []
     if (source.value === 'file')
       for (const file of files.value) {
@@ -299,7 +315,7 @@ onMounted(async () => {
               ><el-option label="＋ 随本次接入新建数据集" value="new" /><el-option
                 v-for="item in visibleDatasetOptions"
                 :key="item.id"
-                :label="item.name"
+                :label="hasDuplicateDatasetName(item) ? `${item.name}（存在同名数据集）` : item.name"
                 :value="item.id" /><el-option
                 v-if="datasetTotal > 50"
                 label="结果较多，请输入更具体的关键词"
@@ -342,10 +358,10 @@ onMounted(async () => {
               drag
               multiple
               :auto-upload="false"
-              accept=".txt,.csv,.json,.xlsx,.pdf"
+              accept=".txt,.csv,.json,.jsonl,.xlsx"
               :on-change="validateFile"
               ><AppIcon name="UploadFilled" /><b>点击或拖拽文件到此处</b>
-              <p>支持 TXT、CSV、JSON、XLSX、PDF<br />单个文件不超过 2GB</p></el-upload
+              <p>支持 TXT、CSV、JSON、JSONL、XLSX<br />单个文件不超过 2GB</p></el-upload
             >
             <div v-else class="resource-source-hint">
               <AppIcon :name="selectedSource.icon" /><b>{{ selectedSource.label }}接入</b>
@@ -378,7 +394,7 @@ onMounted(async () => {
                 <el-input v-model="form.sourceQuery" type="textarea" :rows="3" placeholder="SELECT id, content FROM orders" />
               </el-form-item>
             </template>
-            ><el-form-item label="数据所有者"
+            <el-form-item label="数据所有者"
               ><el-input v-model="form.owner" placeholder="请输入数据所有者"
             /></el-form-item>
           </div>
@@ -390,36 +406,42 @@ onMounted(async () => {
       </el-form>
     </PanelCard>
     <PanelCard title="任务执行进度" icon="PieChart"
-      ><div v-if="activeTask" class="resource-task-progress">
+      ><div class="resource-task-progress">
         <el-progress
           type="circle"
-          :percentage="activeTask.progress"
+          :percentage="activeTask?.progress ?? 0"
           :width="155"
           :stroke-width="15"
-          :status="activeTask.status === 'failed' ? 'exception' : undefined"
-          ><b>{{ activeTask.progress }}%</b>
+          :status="activeTask?.status === 'failed' ? 'exception' : undefined"
+          ><b>{{ activeTask?.progress ?? 0 }}%</b>
           <p>
-            {{ activeTask.status === 'failed' ? '接入失败' : stageNames[Math.min(stage, 4)] }}
+            {{ activeTask?.status === 'failed' ? '接入失败' : stageNames[Math.min(stage, 4)] }}
           </p></el-progress
         ><el-steps direction="vertical" :active="stage" :space="42"
           ><el-step v-for="name in stageNames" :key="name" :title="name"
         /></el-steps>
       </div>
-      <el-empty v-else description="暂无接入任务" :image-size="80" />
-      <p class="resource-task-name">{{ activeTask?.name }}</p>
+      <el-alert
+        v-if="activeTask?.status === 'failed'"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="`接入失败：${activeTask.result?.error ?? '未提供失败原因'}`"
+      />
+      <p v-if="activeTask" class="resource-task-name">{{ activeTask.name }}</p>
       <h4>接入结果统计</h4>
       <div class="resource-result-grid">
         <div>
-          <span>成功</span><b>{{ store.succeededTaskTotal.toLocaleString() }}</b>
+          <span>样本条数</span><b>{{ !activeTask || activeTask.status === 'failed' ? 0 : (activeTask.result?.statistics?.total_rows ?? activeTask.result?.statistics?.totalRows)?.toLocaleString() ?? '—' }} 条</b>
         </div>
         <div>
-          <span>重复</span><b>{{ activeTask?.duplicateCount.toLocaleString() ?? '—' }}</b>
+          <span>重复</span><b>{{ !activeTask || activeTask.status === 'failed' ? 0 : activeTask.duplicateCount?.toLocaleString() ?? '—' }} 条</b>
         </div>
         <div>
-          <span>异常</span><b>{{ activeTask?.anomalyCount.toLocaleString() ?? '—' }}</b>
+          <span>异常</span><b>{{ !activeTask || activeTask.status === 'failed' ? 0 : activeTask.anomalyCount?.toLocaleString() ?? '—' }} 条</b>
         </div>
-      </div></PanelCard
-    >
+      </div>
+      </PanelCard>
   </div>
   <PanelCard title="接入任务记录" icon="List"
     ><IngestTaskTable :key="tableKey" @select="current = $event"

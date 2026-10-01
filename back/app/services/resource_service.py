@@ -1,6 +1,6 @@
 from app.domain.schemas import CreateDatasetRequest
 from app.repositories.audit_repository import add_log
-from app.repositories.resource_repository import create_dataset
+from app.repositories.resource_repository import create_dataset, find_dataset_by_name
 
 
 def create_new_dataset(request: CreateDatasetRequest):
@@ -15,6 +15,9 @@ def create_new_dataset(request: CreateDatasetRequest):
         "record_count": request.record_count,
         "languages": request.languages,
     }
+
+    if find_dataset_by_name(request.name) is not None:
+        raise ValueError(f"已存在同名数据集：{request.name}")
 
     # 保存数据集
     dataset = create_dataset(dataset_data)

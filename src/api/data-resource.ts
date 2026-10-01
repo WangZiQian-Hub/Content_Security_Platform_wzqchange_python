@@ -65,7 +65,10 @@ export async function listIngestTasks(query: {
     page: query.page,
     pageSize: query.pageSize,
     totalPages: Math.ceil(rows.length / query.pageSize),
-    succeededTotal: rows.filter((row) => row.status === 'succeeded').length,
+    // 保留旧字段名兼容已有调用方；数值改为成功任务的样本条数总和。
+    succeededTotal: rows
+      .filter((row) => row.status === 'succeeded')
+      .reduce((total, row) => total + (row.result?.statistics?.total_rows ?? 0), 0),
   }
 }
 // 写入始终走真实接口；不生成模拟成功或伪造任务留痕。

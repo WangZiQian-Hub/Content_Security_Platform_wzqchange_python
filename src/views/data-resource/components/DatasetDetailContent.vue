@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { languageName } from '../../../utils/governance-language'
 import type { ResourceDataset } from '../../../types/data-resource'
+import { formatStorage } from '../../../utils/file-size'
 const props = defineProps<{ dataset: ResourceDataset }>()
 const tab = ref('basic')
 watch(
@@ -17,7 +18,7 @@ watch(
       <span>数据量</span><b>{{ dataset.rowCount.toLocaleString() }}</b>
     </div>
     <div>
-      <span>存储量</span><b>{{ dataset.storageGb }} GB</b>
+      <span>存储量</span><b>{{ formatStorage(dataset.storageGb) }}</b>
     </div>
     <div>
       <span>质量评分</span><b>{{ dataset.qualityScore }}</b>

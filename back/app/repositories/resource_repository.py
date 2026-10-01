@@ -122,8 +122,26 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
-from app.models.tables import Dataset, Metric, Model, Resource
+from app.models.tables import Dataset, DatasetRecord, Metric, Model, Resource, Task, TrainingTask
 from app.services.resource_display import dataset_display_defaults, model_version_default
+
+
+def normalize_dataset_name(name: str) -> str:
+    """Normalize dataset names for case-insensitive duplicate checks."""
+    return " ".join((name or "").replace("\u3000", " ").split()).casefold()
+
+
+def find_dataset_by_name(name: str, exclude_id: int | None = None) -> Dataset | None:
+    """Find a dataset by normalized name without relying on MySQL collation."""
+    normalized_name = normalize_dataset_name(name)
+    with SessionLocal() as db:
+        datasets = db.scalars(select(Dataset)).all()
+        for dataset in datasets:
+            if exclude_id is not None and dataset.id == exclude_id:
+                continue
+            if normalize_dataset_name(dataset.name) == normalized_name:
+                return dataset
+    return None
 
 
 from typing import Any
@@ -403,6 +421,11 @@ def update_dataset(dataset_id: int, data: dict[str, Any]):
         if dataset is None:
             return None
 
+        if "name" in data:
+            duplicate = find_dataset_by_name(data["name"], exclude_id=dataset_id)
+            if duplicate is not None:
+                raise ValueError(f"已存在同名数据集：{data['name']}")
+
         # 更新数据表中的普通字段
         for field in (
             "name",
@@ -435,3 +458,46 @@ def update_dataset(dataset_id: int, data: dict[str, Any]):
         db.refresh(dataset)
 
         return resource_to_dict(dataset)
+
+
+def delete_dataset(dataset_id: int) -> int:
+    """Delete exactly one dataset and its own ingest records in one transaction."""
+    if not isinstance(dataset_id, int) or isinstance(dataset_id, bool) or dataset_id <= 0:
+        raise ValueError("数据集 id 必须是正整数")
+    with SessionLocal() as db:
+        dataset = db.scalar(select(Dataset).where(Dataset.id == dataset_id))
+        if dataset is None:
+            raise LookupError(f"数据集不存在：{dataset_id}")
+        if dataset_id in {1, 2, 3, 4}:
+            raise ValueError("演示数据集不允许删除")
+        ingest_tasks: list[Task] = []
+        governance_refs: list[Task] = []
+        for task in db.scalars(select(Task)).all():
+            references = [
+                (task.input_data or {}).get("dataset_id"),
+                (task.result or {}).get("dataset_id"),
+            ]
+            references = [
+                value
+                for value in references
+                if isinstance(value, (int, str))
+                and not isinstance(value, bool)
+                and str(value).strip().lower() != "null"
+            ]
+            if not any(str(value) == str(dataset_id) for value in references):
+                continue
+            if task.capability_code == "data_ingest":
+                ingest_tasks.append(task)
+            else:
+                governance_refs.append(task)
+        training_refs = [item for item in db.scalars(select(TrainingTask)).all() if str(item.dataset_id) == str(dataset_id)]
+        if training_refs:
+            raise ValueError("数据集已被模型训练任务引用，无法删除")
+        if governance_refs:
+            raise ValueError("数据集已被数据治理任务引用，无法删除")
+        db.query(DatasetRecord).filter(DatasetRecord.dataset_id == dataset_id).delete(synchronize_session=False)
+        for task in ingest_tasks:
+            db.delete(task)
+        db.delete(dataset)
+        db.commit()
+        return dataset_id

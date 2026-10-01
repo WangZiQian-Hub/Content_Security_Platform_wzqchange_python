@@ -45,6 +45,32 @@ export interface IngestTask {
   traceId: string
   datasetId?: number
   datasetVersionId?: string
+  result?: {
+    error?: string
+    error_code?: string
+    error_type?: string
+    duplicate_dataset_id?: number
+    statistics?: {
+      basis?: string
+      total_rows?: number
+      success_count?: number
+      duplicate_count?: number
+      anomaly_count?: number
+      inserted_count?: number
+      title_missing_count?: number
+      content_column_found?: boolean
+      cross_batch_dedup_skipped?: boolean
+      totalRows?: number
+      successCount?: number
+      duplicateCount?: number
+      anomalyCount?: number
+      insertedCount?: number
+      titleMissingCount?: number
+      contentColumnFound?: boolean
+      crossBatchDedupSkipped?: boolean
+    }
+    [key: string]: unknown
+  }
 }
 export interface ResourceSummary {
   asOf?: string

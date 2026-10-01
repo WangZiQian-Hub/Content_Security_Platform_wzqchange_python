@@ -8,6 +8,7 @@ from app.repositories.resource_repository import (
     create_model,
     find_resource,
     list_resources,
+    delete_dataset,
 )
 from app.services.resource_display import risk_alert_display_name
 
@@ -236,6 +237,19 @@ def get_dataset_detail(dataset_id: int):
         data=dataset,
         message="数据集详情查询成功",
     )
+
+
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset_api(dataset_id: int):
+    if dataset_id <= 0:
+        raise HTTPException(status_code=400, detail="数据集 id 必须是正整数")
+    try:
+        deleted_id = delete_dataset(dataset_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return success(data={"id": deleted_id}, message="数据集已删除")
 
 
 @router.get("/datasets/{dataset_id}/versions")

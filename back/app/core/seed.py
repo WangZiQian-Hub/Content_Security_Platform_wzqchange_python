@@ -21,17 +21,12 @@ from app.models.tables import (
     EvaluationEvent,
 )
 from app.services.resource_display import (
-    dataset_storage_default,
     dataset_display_defaults,
     model_version_default,
     normalize_source_name,
     task_dataset_default,
-    task_display_defaults,
-    task_ingest_statistics,
     task_version_default,
 )
-
-MAX_LOCAL_FILE_STORAGE_GB = 2.0
 
 
 def ensure_evaluation_metric_columns():
@@ -385,24 +380,9 @@ def migrate_legacy_resources():
 
 def ensure_resource_display_values():
     """补齐历史演示记录的来源和数据量，不覆盖真实已填写的值。"""
-    demo_dataset_names = {
-        "跨文化交流语料",
-        "行业风险标注数据集",
-        "社交媒体中文语料库",
-        "多模态内容安全样本集",
-    }
-
     with SessionLocal() as db:
         for dataset in db.scalars(select(Dataset)).all():
             metadata = dict(dataset.metadata_json or {})
-            should_seed_demo = dataset.name in demo_dataset_names and not metadata.get(
-                "display_storage_initialized"
-            )
-            if should_seed_demo or float(metadata.get("storage_gb", 0) or 0) <= 0:
-                metadata["storage_gb"] = dataset_display_defaults(
-                    f"{dataset.id}:{dataset.name}"
-                )[0]
-                metadata["display_storage_initialized"] = True
             storage_gb, record_count, quality_score = dataset_display_defaults(
                 f"{dataset.id}:{dataset.name}",
                 float(metadata.get("storage_gb", 0) or 0),
@@ -426,34 +406,13 @@ def ensure_resource_display_values():
                 model.version = model_version_default(model.id, model.name)
 
         for task in db.scalars(select(Task)).all():
-            default_source_name, default_storage_gb = task_display_defaults(task.task_id)
             source_name = normalize_source_name(task.source_name)
             if not source_name:
-                task.source_name = default_source_name
+                task.source_name = "未填写来源"
             elif source_name != task.source_name:
                 task.source_name = source_name
-            # 新接入的小文件按 1 GB 展示，避免前端固定 GB 单位时出现一长串小数。
-            # 已有的大文件容量保持原样，不在启动时擅自改写。
-            storage_gb = float(task.storage_gb or 0)
-            if task.capability_code == "data_ingest" and 0 < storage_gb < 1:
-                delta_gb = 1 - storage_gb
-                task.storage_gb = 1
-                result = task.result or {}
-                dataset_id = result.get("dataset_id") or (task.input_data or {}).get("dataset_id")
-                if dataset_id is not None:
-                    dataset = db.get(Dataset, dataset_id)
-                    if dataset is not None:
-                        metadata = dict(dataset.metadata_json or {})
-                        metadata["storage_gb"] = round(
-                            float(metadata.get("storage_gb", 0) or 0) + delta_gb,
-                            6,
-                        )
-                        dataset.metadata_json = metadata
-            elif storage_gb <= 0:
-                task.storage_gb = default_storage_gb
-            elif task.capability_code == "data_ingest" and task.source_name == "本地文件":
-                # 历史演示数据可能使用旧的 80–360GB 本地文件范围，启动时迁移到新上限。
-                task.storage_gb = min(storage_gb, MAX_LOCAL_FILE_STORAGE_GB)
+            # Task and dataset capacities are immutable after a successful
+            # ingest. Startup must not repair them with estimates or defaults.
             if not task.dataset_version and not task.model_version:
                 task.dataset_version = task_version_default(
                     task.task_id,
@@ -462,16 +421,8 @@ def ensure_resource_display_values():
             if task.capability_code == "data_ingest":
                 if not task.dataset_name:
                     task.dataset_name = task_dataset_default(task.task_id)
-                default_success, default_duplicate, default_anomaly = task_ingest_statistics(
-                    task.task_id,
-                    float(task.storage_gb or 0),
-                )
-                if not task.success_count:
-                    task.success_count = default_success
-                if not task.duplicate_count:
-                    task.duplicate_count = default_duplicate
-                if not task.anomaly_count:
-                    task.anomaly_count = default_anomaly
+                # Do not synthesize ingest counts for historical rows. New
+                # tasks persist parser statistics when they complete.
 
         db.commit()
 
@@ -508,14 +459,14 @@ def ensure_ingest_demo_tasks():
                 continue
             if name in existing_names:
                 continue
-            default_source, storage_gb = task_display_defaults(task_id)
+            storage_gb = 0.0
             db.add(
                 Task(
                     task_id=task_id,
                     name=name,
                     capability_code="data_ingest",
                     status="succeeded",
-                    source_name=source_name or default_source,
+                    source_name=source_name,
                     dataset_name=dataset_name,
                     storage_gb=storage_gb,
                     progress=100,

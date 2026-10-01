@@ -8,10 +8,14 @@ import { useDataResourceStore } from '../../stores/data-resource'
 import { isMock } from '../../api/request'
 import type { StatisticsQuery } from '../../types/data-resource'
 import { formatResourceComparison } from '../../utils/resource-comparison'
+import { formatStorage, formatStorageValue } from '../../utils/file-size'
+import { languageName } from '../../utils/governance-language'
+import { displayLanguageDistribution } from '../../utils/resource-language'
 const store = useDataResourceStore()
 const dates = ref<[string, string]>()
 const filters = reactive<StatisticsQuery>({ sourceType: '', language: '' })
 const summary = computed(() => store.summary)
+const displayedLanguages = computed(() => displayLanguageDistribution(summary.value?.languages ?? []))
 async function search() {
   await store.loadSummary('statistics', {
     ...filters,
@@ -31,15 +35,15 @@ function exportReport() {
     ...summary.value.kpis.map((item) => [item.label, item.displayValue ?? item.value, item.unit,
       formatResourceComparison(item.comparison), item.comparison?.currentAt || '',
       item.comparison?.previousAt || '', item.comparison?.previousValue ?? '—']),
-    ...(['sources', 'languages', 'modalities', 'quality', 'issues'] as const).flatMap(key => [[key, summary.value!.basis?.[key] || ''], ...summary.value![key].map(item => [item.name, item.value])]),
-    ['日期', '新增(GB)', '累计(GB)'],
-    ...summary.value.trend.dates.map((date, i) => [date, summary.value!.trend.added[i]!, summary.value!.trend.total[i]!]),
+    ...(['sources', 'languages', 'modalities', 'issues'] as const).flatMap(key => [[key, summary.value!.basis?.[key] || ''], ...summary.value![key].map(item => [item.name, item.value])]),
+    ['日期', '接入任务数据量'],
+    ...summary.value.trend.dates.map((date, i) => [date, summary.value!.trend.added[i]!]),
     [],
-    ['数据集', '来源', '存储量(GB)', '使用次数', '使用占比(%)'],
+    ['数据集', '来源', '存储量', '使用次数', '使用占比(%)'],
     ...summary.value.ranking.map((item) => [
       item.name,
       item.source,
-      item.storageGb,
+      formatStorageValue(item.storageGb),
       item.uses,
       item.share,
     ]),
@@ -72,36 +76,29 @@ function exportReport() {
       aria-label="统计数据来源"
       ><el-option v-for="s in store.filterOptions.sources" :key="s.code" :label="s.name" :value="s.code" /></el-select
     ><el-select v-model="filters.language" clearable placeholder="全部语言" aria-label="统计语言"
-      ><el-option v-for="l in store.filterOptions.languages" :key="l.code" :label="l.name" :value="l.code" /></el-select
+      ><el-option v-for="l in store.filterOptions.languages" :key="l.code" :label="languageName(l.code)" :value="l.code" /></el-select
     ><el-button type="primary" :loading="store.loading" @click="search">查询</el-button
     ><el-button :disabled="!summary || store.loading" @click="exportReport">↓ 导出报表</el-button>
   </div>
   <div class="resource-statistics-top">
-    <PanelCard title="数据增长趋势" icon="TrendCharts"
-      ><ResourceChart v-if="summary?.trend.dates.length" kind="line" :trend="summary?.trend" cumulative :height="235" /><p v-else>{{ summary?.basis?.trend || '暂无趋势数据' }}</p></PanelCard
+    <PanelCard title="接入任务数据量" icon="TrendCharts"
+      ><ResourceChart v-if="summary?.trend.dates.length" kind="line" :trend="summary?.trend" :height="235" /><p v-else>{{ summary?.basis?.trend || '暂无接入任务数据' }}</p><p class="resource-trend-note">按接入任务统计的数据量，与上方数据总量口径不同</p></PanelCard
     ><PanelCard title="数据来源分布" icon="PieChart"
       ><ResourceChart
         v-if="summary?.sources.length"
         kind="donut"
         donut-layout="spacious"
         :data="summary?.sources"
-        :center-text="`${summary?.kpis.find((item) => item.id === 'storage')?.value ?? '—'} ${summary?.kpis.find(item => item.id === 'storage')?.unit || ''}`"
+        :center-text="formatStorage(summary?.kpis.find((item) => item.id === 'storage')?.value)"
         :height="235" /><p>{{ summary?.basis?.sources }}</p></PanelCard
-    ><PanelCard title="数据模态分布" icon="Grid"
-      ><DistributionBars :data="summary?.modalities ?? []"
-    /><p>{{ summary?.basis?.modalities }}</p></PanelCard>
+    >
   </div>
   <div class="resource-statistics-bottom">
     <PanelCard title="语言分布" icon="Document"
-      ><DistributionBars :data="summary?.languages ?? []" /><p>{{ summary?.basis?.languages }}</p></PanelCard
-    ><PanelCard title="数据质量概览" icon="Location"
-      ><div class="resource-quality">
-        <ResourceChart v-if="summary?.quality.length" kind="radar" :data="summary?.quality" :height="230" />
-        <div>
-          <span>综合评分</span><b>{{ summary?.qualityScore ?? '—' }}</b
-          ><span>/ 100</span>
-        </div>
-      </div><p>{{ summary?.basis?.quality }}</p></PanelCard
+      ><DistributionBars :data="displayedLanguages" /><p>{{ summary?.basis?.languages }}</p></PanelCard
+    ><PanelCard title="数据模态分布" icon="Grid"
+      ><DistributionBars :data="summary?.modalities ?? []"
+    /><p>{{ summary?.basis?.modalities }}</p></PanelCard
     ><PanelCard title="数据问题统计" icon="Grid"
       ><div v-for="(item, index) in summary?.issues" :key="item.name" class="resource-issue">
         <i :class="{ danger: index > 1 }">≡</i
@@ -121,7 +118,7 @@ function exportReport() {
         prop="source"
         label="数据来源"
         min-width="130" /><el-table-column label="数据量" min-width="120"
-        ><template #default="{ row }">{{ row.storageGb }} GB</template></el-table-column
+        ><template #default="{ row }">{{ formatStorage(row.storageGb) }}</template></el-table-column
       ><el-table-column label="使用次数" min-width="120"
         ><template #default="{ row }">{{ row.uses.toLocaleString() }}</template></el-table-column
       ><el-table-column label="使用占比" min-width="220"
