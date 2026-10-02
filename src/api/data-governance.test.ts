@@ -79,4 +79,23 @@ describe('数据处理接口契约', () => {
     expect((await listProcessTasks(5, 10)).items).toEqual([])
     await expect(getProcessTask('demo_missing')).rejects.toThrow('任务不存在')
   })
+  it('正式接口把整数主键映射为版本号字符串', async () => {
+    backend.isMock = false
+    backend.request.mockImplementation(async ({ url, params }) => {
+      if (url === '/data-governance/options') return { rules: [], templates: [] }
+      if (url === '/datasets') return { items: [{ id: 14, name: '测试数据集' }], total: 1 }
+      if (url === '/datasets/14/versions') {
+        return {
+          items: [
+            { id: 10, version_id: 'v1.0.1', version: 'v1.0.1', label: 'v1.0.1', languages: ['zh'] },
+          ],
+          total: 1,
+        }
+      }
+      throw new Error(`unexpected request: ${url} ${JSON.stringify(params)}`)
+    })
+    const options = await getProcessOptions()
+    expect(options.datasets[0]!.versions[0]!.versionId).toBe('v1.0.1')
+    expect(options.datasets[0]!.versions[0]!.versionId).not.toBe('10')
+  })
 })

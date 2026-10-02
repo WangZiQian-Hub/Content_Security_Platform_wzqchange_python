@@ -11,6 +11,7 @@ from app.core.time import now_shanghai
 from app.domain.schemas import RegisterModelServiceRequest
 from app.models.tables import Dataset, Model, ModelVersion, ModelService, ModelCall, TrainingTask, Task
 from app.routers.training_tasks import advance_training_task, training_task_payload
+from app.services.versioning import current_dataset_version_name
 
 router = APIRouter()
 
@@ -29,7 +30,12 @@ def _service_payload(service: ModelService) -> dict:
         "healthy": service.healthy,
     }
 
-def _default_assessment(model: Model, versions: list[ModelVersion], dataset: Dataset) -> dict | None:
+def _default_assessment(
+    model: Model,
+    versions: list[ModelVersion],
+    dataset: Dataset,
+    dataset_version: str | None = None,
+) -> dict | None:
     """按模型和测试集生成稳定的默认评估快照，供首次进入评估页展示。"""
     edited = next((item.version for item in versions if item.version != model.version), None)
     if not edited:
@@ -42,7 +48,8 @@ def _default_assessment(model: Model, versions: list[ModelVersion], dataset: Dat
     return {
         "id": f"assessment-default-{model.id}-{dataset.id}", "task_id": f"task-assessment-default-{model.id}-{dataset.id}",
         "model_id": str(model.id), "baseline": model.version, "edited": edited,
-        "dataset_id": str(dataset.id), "dataset_version": dataset.version, "knowledge": "默认安全知识编辑验证",
+        "dataset_id": str(dataset.id), "dataset_version": dataset_version,
+        "knowledge": "默认安全知识编辑验证",
         "status": "succeeded", "risk_total": risk_total, "risk_before": 34 + offset * 2,
         "risk_after": 7 + offset, "target_total": target_total, "target_before": 9 + offset,
         "target_after": target_total - 2, "general_total": general_total, "general_before": general_total - 4,
@@ -74,6 +81,7 @@ def _assessment_for_edit_task(
     model: Model,
     versions: list[ModelVersion],
     dataset: Dataset,
+    dataset_version: str | None = None,
 ) -> dict | None:
     """为已完成编辑任务生成与该任务一一对应的展示快照。"""
     edited = next((item.version for item in versions if item.version != model.version), None)
@@ -90,7 +98,7 @@ def _assessment_for_edit_task(
     return {
         "id": f"assessment-edit-{task.task_id}", "task_id": task.task_id,
         "model_id": str(model.id), "baseline": model.version, "edited": edited,
-        "dataset_id": str(dataset.id), "dataset_version": dataset.version,
+        "dataset_id": str(dataset.id), "dataset_version": dataset_version,
         "knowledge": knowledge, "status": "succeeded",
         "risk_total": risk_total, "risk_before": risk_before, "risk_after": risk_after,
         "target_total": target_total, "target_before": 8 + seed % 8,
@@ -144,7 +152,14 @@ def current_model_workbench():
         now = now_shanghai()
         if any(advance_training_task(task, now) for task in training_tasks):
             db.commit()
+
         datasets = list(db.scalars(select(Dataset).order_by(Dataset.id.desc())).all())
+        # 工作台展示的数据集版本同样取 dataset_versions 的最后登记版本，
+        # 供评估快照和下方数据集列表共用。
+        dataset_versions_map = {
+            dataset.id: current_dataset_version_name(db, dataset.id) or dataset.version
+            for dataset in datasets
+        }
         assessments = list(db.scalars(select(Task).where(Task.capability_code == "evaluation").order_by(Task.created_at.desc())).all())
         edit_tasks = list(db.scalars(select(Task).where(Task.capability_code == "knowledge_edit").order_by(Task.created_at.desc())).all())
         latest_edit = edit_tasks[0] if edit_tasks else None
@@ -162,12 +177,14 @@ def current_model_workbench():
                 edited_model,
                 version_map.get(edited_model.id, []),
                 datasets[0],
+                dataset_versions_map.get(datasets[0].id),
             )
         if assessment is None and models and datasets:
             assessment = _default_assessment(
                 models[0],
                 version_map.get(models[0].id, []),
                 datasets[0],
+                dataset_versions_map.get(datasets[0].id),
             )
     return success(
         data={
@@ -178,7 +195,8 @@ def current_model_workbench():
             "assessment": assessment, "changes": [],
             "datasets": [
                 {
-                    "id": str(dataset.id), "name": dataset.name, "version": dataset.version,
+                    "id": str(dataset.id), "name": dataset.name,
+                    "version": dataset_versions_map.get(dataset.id),
                     "row_count": int((dataset.metadata_json or {}).get("record_count", 0) or 0),
                     # 训练弹窗按 purpose=training 筛选；这些数据库数据集均可作为训练输入。
                     "purpose": "training",

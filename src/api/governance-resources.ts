@@ -15,13 +15,25 @@ export async function getGovernanceResources(): Promise<GovernanceResource[]> {
       let versionPage = 1
       while (true) {
         const response = await request<
-          PageResult<{ id: string; label: string; languages: string[] }>
+          PageResult<{
+            id: number
+            versionId?: string
+            version_id?: string
+            version?: string
+            label?: string
+            languages: string[]
+          }>
         >({ url: `/datasets/${d.id}/versions`, params: { page: versionPage, pageSize: 100 } })
         versions.push(
-          ...response.items.map((v) => ({
-            ...v,
-            languages: v.languages.map((code) => ({ code, name: languageName(code) })),
-          })),
+          ...response.items.map((v) => {
+            // 版本标识必须是版本号字符串，不能是 dataset_versions 的自增主键 id。
+            const versionId = String(v.versionId ?? v.version_id ?? v.version ?? v.label ?? '')
+            return {
+              id: versionId,
+              label: String(v.label ?? versionId),
+              languages: v.languages.map((code) => ({ code, name: languageName(code) })),
+            }
+          }),
         )
         if (versions.length >= response.total) break
         if (!response.items.length) throw new Error('资源版本分页不完整')

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from app.core.response import success
 from app.core.database import SessionLocal
 from app.core.time import now_shanghai
-from app.models.tables import Dataset, Task
+from app.models.tables import Dataset, Task, DatasetRecord, DatasetVersion, ProcessAudit
 from sqlalchemy import select
 
 router = APIRouter()
@@ -15,16 +15,11 @@ PROCESS_KIND = "governance-process"
 VALUE_KIND = "governance-value"
 ANOMALY_KIND = "governance-anomaly"
 RULES = [
-    {"code": "normalize_text", "label": "文本规范化", "description": "统一空格、换行、标点与日期格式。"},
-    {"code": "deduplicate", "label": "精确去重", "description": "识别完全相同的数据并保留一条。"},
-    {"code": "normalize_encoding", "label": "编码统一", "description": "将可解码内容统一为 UTF-8。"},
-    {"code": "complete_fields", "label": "字段补全", "description": "仅按可信元数据或明确映射规则补齐字段。"},
+    {"code": "deduplicate", "label": "精确去重", "description": "按接入链路相同的正文归一化口径去重，保留源版本中最早的一条。"},
+    {"code": "complete_fields", "label": "字段补全", "description": "标题和正文必须存在且非空，不满足的样本丢弃。"},
 ]
-TEMPLATES = [
-    {"id": "standard", "name": "标准清洗流程", "rules": [item["code"] for item in RULES]},
-    {"id": "deduplicate", "name": "去重与补全", "rules": ["deduplicate", "complete_fields"]},
-    {"id": "normalize", "name": "格式规范化", "rules": ["normalize_text", "normalize_encoding"]},
-]
+TEMPLATES = [{"id": "deduplicate", "name": "去重与字段补全", "rules": ["complete_fields", "deduplicate"]}]
+
 VALUE_SCHEMES = [
     {
         "id": "general-v1",
@@ -422,11 +417,13 @@ def process_options(kind: str = Query(default=PROCESS_KIND)):
 def process_preview(payload: dict = Body(...)):
     input_data = payload.get("input") or {}
     if payload.get("kind") != PROCESS_KIND:
-        raise ValueError("不支持的数据治理类型")
+        raise ValueError("不支持的处理类型")
     if not input_data.get("dataset_id") and not input_data.get("datasetId"):
         raise ValueError("请选择数据集")
-    # 预览不写库、不生成版本；真实样本处理由后续清洗引擎接入。
-    return success(data={"items": [], "sample_count": 0}, message="处理预览完成")
+    from app.services.data_processing import preview_process
+    with SessionLocal() as db:
+        result = preview_process(db, input_data)
+    return success(data=result, message="处理预览完成")
 
 
 def _anomaly_overview_payload() -> dict:
@@ -469,6 +466,23 @@ def governance_resource_samples(dataset_id: int, version_id: str, request: Reque
     }
     if not wanted_ids:
         return success(data=[], message="数据集样本查询成功")
+
+    # 数据处理对比必须读取真实版本快照；治理模拟数据继续走兼容分支。
+    with SessionLocal() as db:
+        version = db.scalar(select(DatasetVersion).where(
+            DatasetVersion.dataset_id == dataset_id, DatasetVersion.version == version_id
+        ))
+        numeric_ids = [int(item) for item in wanted_ids if item.isdigit()]
+        if version is not None and numeric_ids:
+            records = db.scalars(select(DatasetRecord).where(
+                DatasetRecord.dataset_version_id == version.id, DatasetRecord.id.in_(numeric_ids)
+            )).all()
+            if records:
+                return success(data=[{
+                    "id": str(record.id), "dataset_id": dataset_id, "version_id": version_id,
+                    "text": str((record.payload or {}).get("content") or ""),
+                    "title": str((record.payload or {}).get("title") or ""),
+                } for record in records], message="数据集样本查询成功")
 
     samples = []
     for task in _tasks(("anomaly_detect",)):
@@ -513,6 +527,17 @@ def governance_resource_samples(dataset_id: int, version_id: str, request: Reque
         for sample in samples
     ]
     return success(data=samples, message="数据集样本查询成功")
+
+
+@router.get("/data-governance/process-tasks/{task_id}/audit")
+def process_audit(task_id: str):
+    with SessionLocal() as db:
+        rows = db.scalars(select(ProcessAudit).where(ProcessAudit.task_id == task_id).order_by(ProcessAudit.id.asc())).all()
+        return success(data=[{
+            "id": row.id, "task_id": row.task_id, "source_record_id": row.source_record_id,
+            "rule_code": row.rule_code, "reason": row.reason, "kept_record_id": row.kept_record_id,
+            "source_payload": row.source_payload, "created_at": row.created_at.isoformat() if row.created_at else None,
+        } for row in rows], message="处理审计查询成功")
 
 
 @router.get("/data-governance/anomaly-results")

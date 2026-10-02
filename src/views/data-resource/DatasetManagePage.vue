@@ -36,7 +36,6 @@ const form = reactive({
   languages: ['zh'],
 })
 const languageNames = computed<Record<string, string>>(() => Object.fromEntries(store.filterOptions.languages.map(l => [l.code, languageName(l.code)])))
-const statusNames = { ready: '可用', processing: '处理中', uploading: '上传中', archived: '已归档' }
 async function load() {
   loading.value = true
   failed.value = false
@@ -65,15 +64,6 @@ function reset() {
 }
 function sortByUpdatedAt(a: ResourceDataset, b: ResourceDataset) {
   return Date.parse(a.updatedAt) - Date.parse(b.updatedAt)
-}
-const statusRank: Record<ResourceDataset['status'], number> = {
-  uploading: 0,
-  processing: 1,
-  ready: 2,
-  archived: 3,
-}
-function sortByStatus(a: ResourceDataset, b: ResourceDataset) {
-  return statusRank[a.status] - statusRank[b.status]
 }
 function openEditor(row: ResourceDataset) {
   editId.value = row.id
@@ -222,6 +212,11 @@ onMounted(load)
         ><template #default="{ row }">{{ formatStorage(row.storageGb) }}</template></el-table-column
       >
       <el-table-column prop="sourceName" label="数据来源" min-width="110" />
+      <el-table-column prop="versionId" label="当前版本" min-width="120"
+        ><template #default="{ row }: { row: ResourceDataset }">{{
+          row.versionId || '-'
+        }}</template></el-table-column
+      >
       <el-table-column prop="qualityScore" label="质量评分" width="120" sortable
         ><template #default="{ row }"
           ><el-tag :type="row.qualityStatus === 'poor' ? 'warning' : 'success'" round>{{
@@ -233,13 +228,6 @@ onMounted(load)
         ><template #default="{ row }">{{
           new Date(row.updatedAt).toLocaleDateString('zh-CN')
         }}</template></el-table-column
-      >
-      <el-table-column prop="status" label="状态" width="110" sortable :sort-method="sortByStatus"
-        ><template #default="{ row }: { row: ResourceDataset }"
-          ><el-tag :type="row.status === 'ready' ? 'success' : 'primary'" round>{{
-            statusNames[row.status]
-          }}</el-tag></template
-        ></el-table-column
       >
       <el-table-column label="操作" width="170"
         ><template #default="{ row }: { row: ResourceDataset }"

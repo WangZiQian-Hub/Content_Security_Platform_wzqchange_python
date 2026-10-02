@@ -40,7 +40,7 @@ watch(
 watch(
   () => form.datasetId,
   () => {
-    form.datasetVersionId = versions.value[0]?.versionId ?? ''
+    form.datasetVersionId = String(versions.value[0]?.versionId ?? '')
   },
 )
 watch(
@@ -54,7 +54,7 @@ async function initialize() {
   if (disposed) return
   form.datasetId =
     store.options?.datasets.find((item) => item.id === 3)?.id ?? store.options?.datasets[0]?.id ?? 0
-  form.datasetVersionId = versions.value[0]?.versionId ?? ''
+  form.datasetVersionId = String(versions.value[0]?.versionId ?? '')
   form.templateId = store.options?.templates[0]?.id ?? ''
   form.rules = [...(store.options?.templates[0]?.rules ?? [])]
   updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -62,7 +62,7 @@ async function initialize() {
 function validatedInput(): ProcessInput | undefined {
   if (
     !form.datasetId ||
-    !versions.value.some((item) => item.versionId === form.datasetVersionId) ||
+    !versions.value.some((item) => String(item.versionId) === String(form.datasetVersionId)) ||
     !form.rules.length ||
     !form.templateId
   ) {

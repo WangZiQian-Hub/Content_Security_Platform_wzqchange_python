@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.core.response import success
 from app.core.time import now_shanghai
+from app.services.versioning import current_dataset_version_name
 from app.models.tables import Dataset, EvaluationMetric, EvaluationMetricRevision, EvaluationTask, EvaluationRun, EvaluationEvent, EvaluationWorkspaceItem
 
 router = APIRouter()
@@ -45,13 +46,15 @@ def source_context(db):
     if not dataset:
         return None
     metadata = dataset.metadata_json or {}
-    return {"entityType":"dataset_snapshot", "entityId":str(dataset.id), "versionId":dataset.version,
+    # 评估来源的版本号同样以 dataset_versions 为准。
+    version = current_dataset_version_name(db, dataset.id) or dataset.version
+    return {"entityType":"dataset_snapshot", "entityId":str(dataset.id), "versionId":version,
             "name":f"{dataset.name}（数据库快照）", "sourceModule":"data-resource",
-            "sourceTaskId":f"dataset-{dataset.id}", "sourceTraceId":f"dataset-{dataset.id}-{dataset.version}",
-            "taskTraceId":f"dataset-{dataset.id}-{dataset.version}", "capabilityCode":"evaluation",
+            "sourceTaskId":f"dataset-{dataset.id}", "sourceTraceId":f"dataset-{dataset.id}-{version}",
+            "taskTraceId":f"dataset-{dataset.id}-{version}", "capabilityCode":"evaluation",
             "status":"succeeded", "algorithmMode":"database", "datasetId":str(dataset.id), "modelId":None,
-            "datasetVersion":dataset.version, "labelVersion":"标签 v1.0", "modelVersion":"模型 v1.0",
-            "evaluatorVersion":"backend-1.0", "contentHash":f"dataset:{dataset.id}:{dataset.version}",
+            "datasetVersion":version, "labelVersion":"标签 v1.0", "modelVersion":"模型 v1.0",
+            "evaluatorVersion":"backend-1.0", "contentHash":f"dataset:{dataset.id}:{version}",
             "sampleCount":int(metadata.get("record_count", 1000)), "canRerun":True,
             "capturedAt":iso(dataset.created_at), "interface":"数据库数据集快照"}
 

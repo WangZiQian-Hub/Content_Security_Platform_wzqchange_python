@@ -134,6 +134,27 @@ class Task(Base):
         nullable=True,
     )
 
+class ProcessAudit(Base):
+    """逐条记录处理任务排除的源样本及确定性依据。"""
+
+    __tablename__ = "process_audits"
+    __table_args__ = (
+        Index("ix_process_audits_task_id", "task_id"),
+        Index("ix_process_audits_source_record_id", "source_record_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_version_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_record_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    kept_record_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai, nullable=False)
+
+
 class AuditLog(Base):
     """
     保存任务执行过程中的开始、完成和失败记录。

@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.core.time import now_shanghai
-from app.models.tables import Dataset, Model, Task
+from app.models.tables import Dataset, DatasetVersion, Model, Task
 from app.routers.compliance import (
     AlertAction,
     act_on_alert,
@@ -54,6 +54,26 @@ class ComplianceApiTest(unittest.TestCase):
         self.db.add_all([dataset, model])
         self.db.flush()
         now = now_shanghai()
+        # 版本号一律登记在 dataset_versions；datasets.version 只作当前版本指针。
+        self.db.add_all([
+            DatasetVersion(
+                dataset_id=dataset.id,
+                version="dsv_000001",
+                task_id=None,
+                is_current=False,
+                is_backfilled=True,
+                created_at=now,
+            ),
+            DatasetVersion(
+                dataset_id=dataset.id,
+                version="dsv_000002",
+                task_id="PROCESS-001",
+                is_current=True,
+                is_backfilled=False,
+                created_at=now,
+            ),
+        ])
+        self.db.flush()
         self.db.add(Task(
             task_id="PROCESS-001",
             name="去重与补全",

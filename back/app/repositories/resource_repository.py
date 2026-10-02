@@ -117,6 +117,7 @@
 
 
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -170,7 +171,13 @@ SOURCE_LABELS = {
 }
 
 
-def resource_to_dict(resource, version_count: int | None = None) -> dict[str, Any]:
+def resource_to_dict(
+    resource,
+    version_count: int | None = None,
+    updated_at: datetime | None = None,
+    version: str | None = None,
+) -> dict[str, Any]:
+    """version 显式传入时以此为准；数据集由调用方按 dataset_versions 解析后传入。"""
     metadata = dict(resource.metadata_json or {})
 
     modalities = [
@@ -195,10 +202,10 @@ def resource_to_dict(resource, version_count: int | None = None) -> dict[str, An
         ),
 
         # 内部任务服务使用 version
-        "version": resource.version,
+        "version": version or resource.version,
 
         # 前端数据集页面使用 versionId
-        "version_id": resource.version,
+        "version_id": version or resource.version,
 
         "status": resource.status,
         "description": resource.description,
@@ -215,8 +222,8 @@ def resource_to_dict(resource, version_count: int | None = None) -> dict[str, An
             else None
         ),
         "updated_at": (
-            resource.created_at.isoformat()
-            if resource.created_at
+            (updated_at.isoformat() if updated_at else resource.created_at.isoformat())
+            if (updated_at or resource.created_at)
             else None
         ),
         "metadata": metadata,
@@ -319,8 +326,25 @@ def list_resources(resource_type: str):
                 ).all()
             )
 
+        version_times: dict[int, datetime] = {}
+        if resource_type == "datasets" and resources:
+            # 当前版本时间 = 该数据集最后登记的那一版（不依赖 datasets.version）。
+            version_times = {
+                row[0]: row[1]
+                for row in db.execute(
+                    select(DatasetVersion.dataset_id, func.max(DatasetVersion.created_at))
+                    .where(
+                        DatasetVersion.dataset_id.in_(
+                            [resource.id for resource in resources]
+                        )
+                    )
+                    .group_by(DatasetVersion.dataset_id)
+                ).all()
+                if row[1] is not None
+            }
+
         return [
-            resource_to_dict(resource, counts.get(resource.id))
+            resource_to_dict(resource, counts.get(resource.id), version_times.get(resource.id))
             if resource_type == "datasets"
             else resource_to_dict(resource)
             for resource in resources
@@ -347,6 +371,16 @@ def find_resource(resource_type: str, resource_id: int):
 
         if resource is None:
             return None
+
+        if resource_type == "datasets":
+            # 数据集版本以 dataset_versions 为准：按 dataset_id 过滤、按 id 顺序取 version。
+            # 老库兜底：一条版本记录都没有时才回落到 datasets.version（基线）。
+            from app.services.versioning import current_dataset_version_name
+
+            return resource_to_dict(
+                resource,
+                version=current_dataset_version_name(db, resource.id) or resource.version,
+            )
 
         return resource_to_dict(resource)
 

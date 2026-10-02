@@ -54,6 +54,7 @@ describe('数据治理统一资源目录及跨页版本链路', () => {
     ).toEqual(
       catalog.map((d) => ({ id: d.id, name: d.name, versions: d.versions.map((v) => v.id) })),
     )
+    expect(catalog.every((d) => d.versions.every((v) => typeof v.id === 'string'))).toBe(true)
     expect(
       risk.datasets.map((d) => ({
         id: d.id,
@@ -176,7 +177,13 @@ describe('数据治理统一资源目录及跨页版本链路', () => {
       if (/\/datasets\/\d+\/versions/.test(url))
         return {
           items: [
-            { id: `version-${params.page}`, label: `版本${params.page}`, languages: ['zh', 'en'] },
+            {
+              id: params.page,
+              version_id: `v1.0.${params.page}`,
+              version: `v1.0.${params.page}`,
+              label: `版本${params.page}`,
+              languages: ['zh', 'en'],
+            },
           ],
           total: 2,
         }
@@ -189,7 +196,9 @@ describe('数据治理统一资源目录及跨页版本链路', () => {
     })
     const all = await options()
     for (const page of Object.values(all)) expect(page.datasets.map((d) => d.id)).toEqual([91, 92])
-    expect(all.value.datasets[0]!.versions.map((v) => v.id)).toEqual(['version-1', 'version-2'])
+    expect(all.value.datasets[0]!.versions.map((v) => v.id)).toEqual(['v1.0.1', 'v1.0.2'])
+    expect(all.value.datasets[0]!.versions.every((v) => typeof v.id === 'string')).toBe(true)
+    expect(all.value.datasets[0]!.versions.map((v) => v.id)).not.toContain('1')
     expect(all.risk.defaultScope.datasetId).toBe(91)
     expect(backend.request).toHaveBeenCalledWith({
       url: '/datasets',

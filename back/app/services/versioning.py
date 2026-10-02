@@ -73,9 +73,7 @@ def _next_version_number(db: Session, dataset_id: int) -> str:
     取"该数据集已用过的最大版本号"的下一个；一条版本都没有时，
     以 datasets.version（基线 v1.0.0）为起点算下一个。
     """
-    existing = db.scalars(
-        select(DatasetVersion.version).where(DatasetVersion.dataset_id == dataset_id)
-    ).all()
+    existing = dataset_version_names(db, dataset_id)
 
     highest: tuple[int, int, int] | None = None
     highest_text: str | None = None
@@ -100,6 +98,78 @@ def _next_version_number(db: Session, dataset_id: int) -> str:
         return next_dataset_version(dataset.version)
 
     return next_dataset_version(highest_text)
+
+
+def dataset_versions(db: Session, dataset_id: int) -> list[DatasetVersion]:
+    """数据集登记过的全部版本，按 id 升序返回。
+
+    dataset_versions 是"只增不改"的顺序表，id 就是登记先后；
+    这里统一按 id 排序，调用方不必各自写 where + order_by。
+    """
+    return list(
+        db.scalars(
+            select(DatasetVersion)
+            .where(DatasetVersion.dataset_id == dataset_id)
+            .order_by(DatasetVersion.id.asc())
+        ).all()
+    )
+
+
+def dataset_version_names(db: Session, dataset_id: int) -> list[str]:
+    """只取版本号字符串，顺序与 dataset_versions() 一致。"""
+    return [
+        str(value)
+        for value in db.scalars(
+            select(DatasetVersion.version)
+            .where(DatasetVersion.dataset_id == dataset_id)
+            .order_by(DatasetVersion.id.asc())
+        ).all()
+        if value is not None and str(value).strip() != ""
+    ]
+
+
+def current_dataset_version_name(db: Session, dataset_id: int) -> str | None:
+    """数据集当前版本号 = dataset_versions 里最后登记的那一版。
+
+    优先认 is_current 标记；标记缺失（老库或回滚）时按 id 取最后一条，
+    也就是追加顺序上的最新版本。任何一处都不再读 datasets.version。
+    """
+    current = db.scalar(
+        select(DatasetVersion)
+        .where(DatasetVersion.dataset_id == dataset_id)
+        .order_by(DatasetVersion.is_current.desc(), DatasetVersion.id.desc())
+        .limit(1)
+    )
+    return str(current.version) if current is not None else None
+
+
+def resolve_dataset_version(
+    db: Session, dataset_id: int, version_ref: Any
+) -> DatasetVersion | None:
+    """把"版本引用"解析成版本记录。
+
+    先按版本号精确匹配；纯数字的引用再按 dataset_versions.id 兜底，
+    兼容早期前端把主键当版本号提交的历史任务。
+    """
+    if version_ref is None:
+        return None
+    text = str(version_ref).strip()
+    if not text:
+        return None
+    version = db.scalar(
+        select(DatasetVersion).where(
+            DatasetVersion.dataset_id == dataset_id,
+            DatasetVersion.version == text,
+        )
+    )
+    if version is None and text.isdigit():
+        version = db.scalar(
+            select(DatasetVersion).where(
+                DatasetVersion.dataset_id == dataset_id,
+                DatasetVersion.id == int(text),
+            )
+        )
+    return version
 
 
 def create_dataset_version(

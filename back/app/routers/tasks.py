@@ -102,6 +102,7 @@ from hashlib import sha256
 from random import Random
 from fastapi import Request
 from time import sleep
+from app.services.data_processing import process_task
 
 
 
@@ -141,6 +142,7 @@ def _process_task(task: dict) -> dict:
         "processed_count": task.get("success_count") or 0,
         "total_count": total, "remaining_seconds": result.get("remaining_seconds"),
         "steps": result.get("steps") or [], "comparisons": result.get("comparisons") or [],
+        "error_message": result.get("error_message"),
         "created_at": task["created_at"], "finished_at": task.get("finished_at"),
         "trace_id": task.get("trace_id"),
     }
@@ -162,44 +164,32 @@ def _process_steps(active_index: int | None) -> list[dict]:
 
 
 def _run_process_task(task_id: str, total: int):
-    """按真实可观察的阶段节奏推进处理任务；每次状态变化均落库。"""
-    elapsed = 0
-    for index, (_, duration) in enumerate(PROCESS_STAGES):
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            if task is None or task.status != "running":
-                return
-            result = dict(task.result or {})
-            result.update({
-                "steps": _process_steps(index),
-                "remaining_seconds": PROCESS_TOTAL_SECONDS - elapsed,
-            })
+    """Execute processing atomically; failures only mark the task failed."""
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if task is None or task.status != "running":
+            return
+        try:
+            result = process_task(db, task_id, dict(task.input_data or {}))
             task.result = result
-            task.progress = round(elapsed * 100 / PROCESS_TOTAL_SECONDS)
-            task.success_count = round(total * elapsed / PROCESS_TOTAL_SECONDS)
+            task.success_count = int(result["retained_count"])
+            task.duplicate_count = int(result["duplicate_count"])
+            task.anomaly_count = int(result["anomaly_count"])
+            task.progress = 100
+            task.status = "succeeded"
+            task.finished_at = now_shanghai()
+            task.dataset_version = result["source_version"]
             db.commit()
-
-        sleep(duration)
-        elapsed += duration
-
-        with SessionLocal() as db:
+        except Exception as error:
+            db.rollback()
             task = db.get(Task, task_id)
-            if task is None or task.status != "running":
-                return
-            result = dict(task.result or {})
-            is_finished = index == len(PROCESS_STAGES) - 1
-            result.update({
-                "steps": _process_steps(None) if is_finished else _process_steps(index + 1),
-                "remaining_seconds": 0 if is_finished else PROCESS_TOTAL_SECONDS - elapsed,
-            })
-            if is_finished:
-                result["output_version"] = result.pop("pending_output_version", None)
-                task.status = "succeeded"
+            if task is not None:
+                task.status = "failed"
+                task.progress = 100
                 task.finished_at = now_shanghai()
-            task.result = result
-            task.progress = round(elapsed * 100 / PROCESS_TOTAL_SECONDS)
-            task.success_count = total if is_finished else round(total * elapsed / PROCESS_TOTAL_SECONDS)
-            db.commit()
+                task.result = {"total_count": total, "processed_count": 0, "retained_count": 0,
+                               "comparisons": [], "steps": [], "error_message": str(error)}
+                db.commit()
 
 
 # 创建并执行任务

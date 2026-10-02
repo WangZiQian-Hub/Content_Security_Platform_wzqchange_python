@@ -243,6 +243,12 @@ def get_dataset_detail(dataset_id: int):
     with SessionLocal() as db:
         summary = dataset_version_summary(db, dataset_id)
 
+    # 更新时间对齐"当前版本"的登记时间（当前版本来自 dataset_versions），
+    # 避免详情页显示的仍是基线版本那天的旧时间。没有版本记录时保留原值。
+    current_version = summary.get("current_version") or {}
+    if current_version.get("createdAt"):
+        dataset["updated_at"] = current_version["createdAt"]
+
     return success(
         data={**dataset, **summary},
         message="数据集详情查询成功",

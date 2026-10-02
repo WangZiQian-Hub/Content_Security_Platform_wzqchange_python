@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.time import now_shanghai
+from app.services.versioning import current_dataset_version_name
 from app.models.tables import (
     ComplianceAlert,
     ComplianceAudit,
@@ -189,6 +190,10 @@ def ensure_compliance_data(db: Session) -> None:
 
     training = db.scalar(select(TrainingTask).order_by(TrainingTask.created_at))
     if training is None:
+        # 训练绑定的数据版本取 dataset_versions 最后登记的一版，不读 datasets.version。
+        first_dataset_version = (
+            current_dataset_version_name(db, datasets[0].id) or datasets[0].version
+        )
         training = TrainingTask(
             id="TR-COMPLIANCE-001",
             name="内容安全合规微调",
@@ -197,7 +202,7 @@ def ensure_compliance_data(db: Session) -> None:
             model_id=str(models[0].id),
             base_version=models[0].version,
             dataset_id=str(datasets[0].id),
-            dataset_version=datasets[0].version,
+            dataset_version=first_dataset_version,
             method="低秩适配微调",
             epochs=10,
             epoch=10,

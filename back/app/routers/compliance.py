@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.response import success
 from app.core.time import now_shanghai
+from app.services.versioning import dataset_versions, resolve_dataset_version
 from app.models.tables import (
     ComplianceAlert,
     ComplianceAudit,
@@ -69,14 +70,18 @@ def _graph(db: Session) -> tuple[list[dict], list[dict]]:
     datasets = {str(row.id): row for row in db.scalars(select(Dataset)).all()}
     models = {str(row.id): row for row in db.scalars(select(Model)).all()}
     known_dataset_versions: set[tuple[str, str]] = set()
-    for dataset in datasets.values():
-        node_id = add_node(_node("dataset", dataset.id, dataset.version, dataset.name))
-        known_dataset_versions.add((str(dataset.id), dataset.version))
 
-    # 数据集有版本历史后，引用"历史版本"的任务同样算已登记。
-    # 只看 datasets.version（当前版本）会把旧版本误判成"输入数据版本未在资源库登记"。
-    for version in db.scalars(select(DatasetVersion)).all():
-        known_dataset_versions.add((str(version.dataset_id), version.version))
+    # 数据集版本一律从 dataset_versions 读：按 dataset_id 过滤、按 id（登记顺序）
+    # 升序排列，取 version 字段。datasets.version 只是"当前版本指针"，不再当版本号用。
+    registry: dict[str, list[DatasetVersion]] = {}
+    for version in db.scalars(
+        select(DatasetVersion).order_by(DatasetVersion.dataset_id, DatasetVersion.id)
+    ).all():
+        registry.setdefault(str(version.dataset_id), []).append(version)
+        known_dataset_versions.add((str(version.dataset_id), str(version.version)))
+    for dataset in datasets.values():
+        for version in registry.get(str(dataset.id), []):
+            add_node(_node("dataset", dataset.id, str(version.version), dataset.name))
 
     process_tasks = db.scalars(select(Task).where(Task.capability_code == "data_process")).all()
     for task in process_tasks:
@@ -85,6 +90,12 @@ def _graph(db: Session) -> tuple[list[dict], list[dict]]:
         dataset_id = str(data.get("dataset_id") or data.get("datasetId") or "unknown")
         input_version = str(data.get("dataset_version_id") or data.get("datasetVersionId") or task.dataset_version or "unknown")
         dataset = datasets.get(dataset_id)
+        # 早期前端把 dataset_versions.id 当版本号提交，这里按版本表解析回真实版本号，
+        # 避免谱系里出现"10""11"这种主键伪版本。
+        if dataset is not None:
+            resolved = resolve_dataset_version(db, dataset.id, input_version)
+            if resolved is not None:
+                input_version = str(resolved.version)
         input_node_id = f"dataset:{dataset_id}:{input_version}"
         if input_node_id not in nodes:
             add_node(_node("dataset", dataset_id, input_version, dataset.name if dataset else f"未登记数据集 {dataset_id}"))
@@ -168,14 +179,19 @@ def contexts(source_kind: str, source_id: str | None = None, trace_id: str | Non
     ensure_compliance_data(db)
     candidates: list[dict] = []
     if source_kind == "dataset":
-        nodes, _ = _graph(db)
-        for node in nodes:
-            if node["type"] != "dataset":
-                continue
-            candidates.append({"source_kind": source_kind, "source_id": node["entity_id"],
-                               "subject_ref": {key: node[key] for key in ("entity_type", "entity_id", "version_id", "display_id", "label")},
-                               "model_version": node["version_id"], "capture_id": None,
-                               "label": f"{node['label']} / {node['version_id']} · 数据版本"})
+        # 数据版本候选直接来自 dataset_versions（按 dataset_id + id 顺序读 version），
+        # 不再从谱系节点反推，避免混入历史任务的脏版本号。
+        for dataset in db.scalars(select(Dataset).order_by(Dataset.id)).all():
+            versions = list(dict.fromkeys(
+                str(item.version)
+                for item in dataset_versions(db, dataset.id)
+                if item.version is not None and str(item.version).strip() != ""
+            ))
+            for version in versions:
+                candidates.append({"source_kind": source_kind, "source_id": str(dataset.id),
+                                   "subject_ref": subject("dataset", dataset.id, dataset.name, version),
+                                   "model_version": version, "capture_id": None,
+                                   "label": f"{dataset.name} / {version} · 数据版本"})
     elif source_kind == "model":
         models = {str(item.id): item for item in db.scalars(select(Model)).all()}
         versions = list(db.scalars(select(ModelVersion)).all())
@@ -230,7 +246,7 @@ def lineage(entity_type: str, entity_id: str, version_id: str | None = None,
     ensure_compliance_data(db)
     nodes, edges = _graph(db)
     roots = [node for node in nodes if node["entity_type"] == entity_type and str(node["entity_id"]) == str(entity_id)
-             and (not version_id or node["version_id"] == version_id)]
+             and (not version_id or str(node["version_id"]) == str(version_id))]
     if not roots:
         raise HTTPException(status_code=404, detail="未找到谱系起点")
     ids = {node["id"] for node in roots}

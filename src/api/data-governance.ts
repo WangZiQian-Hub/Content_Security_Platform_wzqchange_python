@@ -25,7 +25,8 @@ export async function getProcessOptions(): Promise<ProcessOptions> {
     ...options,
     datasets: datasets.map((d) => ({
       ...d,
-      versions: d.versions.map((v) => ({ versionId: v.id, label: v.label })),
+      // 下拉框 value 必须是版本号字符串，后端按 datasets.version 查版本。
+      versions: d.versions.map((v) => ({ versionId: String(v.id), label: v.label })),
     })),
   }
 }
