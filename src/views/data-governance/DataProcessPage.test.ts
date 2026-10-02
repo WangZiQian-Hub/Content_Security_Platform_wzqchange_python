@@ -61,7 +61,7 @@ async function mount() {
   }
 }
 
-describe('数据处理输出版本表单链路', () => {
+describe('数据处理表单链路', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     mocks.store.currentTask = undefined
@@ -75,37 +75,20 @@ describe('数据处理输出版本表单链路', () => {
     mocks.store.preview.mockResolvedValue({ sampleCount: 0, items: [] })
     mocks.confirm.mockResolvedValue(undefined)
   })
-  it.each(['', '   ', 'v1.0.0', 'dsv_existing', 'a'.repeat(65)])(
-    '创建拒绝空、重名或过长的输出版本：%s',
-    async (name) => {
-      const { state, unmount } = await mount()
-      try {
-        state.form.outputVersionName = name
-        await state.runAction('create')
-        expect(mocks.warning).toHaveBeenCalledOnce()
-        expect(mocks.confirm).not.toHaveBeenCalled()
-        expect(mocks.store.createTask).not.toHaveBeenCalled()
-      } finally {
-        unmount()
-      }
-    },
-  )
-  it('预览不要求或提交输出版本，创建保留用户命名及处理规则', async () => {
+  it('预览与创建都不提交手动输出版本，创建保留处理规则', async () => {
     const { state, unmount } = await mount()
     try {
       await state.runAction('preview')
       expect(mocks.store.preview).toHaveBeenCalledOnce()
       expect(mocks.store.preview.mock.calls[0]![0]).not.toHaveProperty('outputVersionName')
-      state.form.outputVersionName = '  清洗版-v1.1.0  '
       await state.runAction('create')
-      expect(mocks.confirm.mock.calls[0]![0]).toContain('输出版本：清洗版-v1.1.0')
+      expect(mocks.confirm.mock.calls[0]![0]).toContain('自动生成新版本')
       expect(mocks.store.createTask).toHaveBeenCalledWith({
         datasetId: 3,
         datasetVersionId: 'dsv_existing',
         scope: 'all',
         templateId: 'standard',
         rules: ['deduplicate'],
-        outputVersionName: '清洗版-v1.1.0',
       })
     } finally {
       unmount()
@@ -121,12 +104,10 @@ describe('数据处理输出版本表单链路', () => {
             confirm = resolve
           }),
       )
-      state.form.outputVersionName = 'v1.1.0'
       const creating = state.runAction('create')
-      state.form.outputVersionName = 'v2.0.0'
       confirm()
       await creating
-      expect(mocks.store.createTask.mock.calls[0]![0].outputVersionName).toBe('v1.1.0')
+      expect(mocks.store.createTask.mock.calls[0]![0]).not.toHaveProperty('outputVersionName')
     } finally {
       unmount()
     }

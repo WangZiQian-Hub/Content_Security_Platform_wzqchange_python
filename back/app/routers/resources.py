@@ -23,7 +23,7 @@ from app.domain.schemas import (
 from sqlalchemy import func, select
 
 from app.core.database import SessionLocal
-from app.models.tables import Task
+from app.models.tables import DatasetRecord, DatasetVersion, Task
 from app.core.response import success
 from app.repositories.audit_repository import add_log
 from app.repositories.resource_repository import (
@@ -32,6 +32,12 @@ from app.repositories.resource_repository import (
     find_resource,
     list_resources,
     update_dataset,
+)
+from app.services.versioning import (
+    count_version_records,
+    dataset_version_summary,
+    dataset_version_to_dict,
+    version_has_snapshot,
 )
 
 
@@ -233,8 +239,12 @@ def get_dataset_detail(dataset_id: int):
     if dataset is None:
         raise HTTPException(status_code=404, detail="数据集不存在")
 
+    # 附带版本概况：详情页就能看到"共几个版本、当前是哪个版本"。
+    with SessionLocal() as db:
+        summary = dataset_version_summary(db, dataset_id)
+
     return success(
-        data=dataset,
+        data={**dataset, **summary},
         message="数据集详情查询成功",
     )
 
@@ -253,23 +263,144 @@ def delete_dataset_api(dataset_id: int):
 
 
 @router.get("/datasets/{dataset_id}/versions")
-def get_dataset_versions(dataset_id: int):
+def get_dataset_versions(
+    dataset_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+):
+    """返回该数据集的全部历史版本。
+
+    以前这里硬编码只返回 1 条当前版本，所以界面上永远看不到历史版本。
+    现在从 dataset_versions 表读取，最新的版本排在前面。
+    """
     dataset = find_resource("datasets", dataset_id)
     if dataset is None:
         raise HTTPException(status_code=404, detail="数据集不存在")
+
+    with SessionLocal() as db:
+        versions = list(db.scalars(
+            select(DatasetVersion)
+            .where(DatasetVersion.dataset_id == dataset_id)
+            .order_by(DatasetVersion.id.desc())
+        ).all())
+
+        items = [
+            dataset_version_to_dict(
+                version,
+                stored_record_count=count_version_records(db, version.id),
+                # 按实际落库行数判断有没有完整数据，不只看登记值。
+                has_snapshot=version_has_snapshot(db, version),
+            )
+            for version in versions
+        ]
+        total = len(items)
+        start = (page - 1) * page_size
+        page_items = items[start : start + page_size]
+
+        summary = dataset_version_summary(db, dataset_id)
+
     return success(
         data={
-            "items": [{
-                "id": dataset["version_id"],
-                "label": dataset["version_id"],
-                "languages": dataset.get("languages", []),
-            }],
-            "total": 1,
-            "page": 1,
-            "page_size": 1,
-            "total_pages": 1,
+            "items": page_items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+            # 旧前端只用了 items/total；这里额外给出当前版本和版本总数。
+            "version_count": summary["version_count"],
+            "current_version": summary["current_version"],
         },
         message="数据集版本查询成功",
+    )
+
+
+@router.get("/datasets/{dataset_id}/versions/{version_id}")
+def get_dataset_version_detail(dataset_id: int, version_id: str):
+    """查询某个版本的详情，并告知该版本在库里存了多少条明细。"""
+    with SessionLocal() as db:
+        version = db.scalar(
+            select(DatasetVersion).where(
+                DatasetVersion.dataset_id == dataset_id,
+                DatasetVersion.version == version_id,
+            )
+        )
+
+        if version is None:
+            raise HTTPException(status_code=404, detail="版本不存在")
+
+        stored = db.scalar(
+            select(func.count(DatasetRecord.id)).where(
+                DatasetRecord.dataset_version_id == version.id
+            )
+        ) or 0
+
+        result = dataset_version_to_dict(
+            version,
+            stored_record_count=int(stored),
+            has_snapshot=version_has_snapshot(db, version),
+        )
+
+    return success(data=result, message="数据集版本详情查询成功")
+
+
+@router.get("/datasets/{dataset_id}/versions/{version_id}/records")
+def get_dataset_version_records(
+    dataset_id: int,
+    version_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+):
+    """分页读取某个版本真正落库的数据行。
+
+    这是"所有版本的数据都存下来了"的最终证明：任意历史版本都能翻出明细。
+    """
+    with SessionLocal() as db:
+        version = db.scalar(
+            select(DatasetVersion).where(
+                DatasetVersion.dataset_id == dataset_id,
+                DatasetVersion.version == version_id,
+            )
+        )
+
+        if version is None:
+            raise HTTPException(status_code=404, detail="版本不存在")
+
+        condition = DatasetRecord.dataset_version_id == version.id
+
+        total = db.scalar(select(func.count(DatasetRecord.id)).where(condition)) or 0
+
+        records = list(db.scalars(
+            select(DatasetRecord)
+            .where(condition)
+            .order_by(DatasetRecord.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all())
+
+        items = [
+            {
+                "id": record.id,
+                "dataset_id": record.dataset_id,
+                "dataset_version_id": record.dataset_version_id,
+                "task_id": record.task_id,
+                "file_id": record.file_id,
+                "payload": record.payload,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+            }
+            for record in records
+        ]
+
+    return success(
+        data={
+            "dataset_id": dataset_id,
+            "version_id": version_id,
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        },
+        message="版本数据明细查询成功",
     )
 
 

@@ -35,8 +35,8 @@ export const navigation: NavItem[] = [
     icon: 'Share',
     description: '数据处理 · 编排治理流程，生成可用数据版本',
     tabs: tabs(
-      ['process', 'value-analysis', 'anomaly', 'risk-classification', 'quality'],
-      ['数据处理', '数据价值分析', '异常数据治理', '风险识别与分级', '数据质量评估'],
+      ['process', 'value-analysis', 'anomaly', 'risk-classification'],
+      ['数据处理', '数据价值分析', '异常数据治理', '风险识别与分级'],
     ),
   },
   {

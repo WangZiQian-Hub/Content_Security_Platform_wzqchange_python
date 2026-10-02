@@ -15,9 +15,7 @@ export interface ProcessInput {
   rules: string[]
   templateId: string
 }
-export interface ProcessCreateInput extends ProcessInput {
-  outputVersionName: string
-}
+export type ProcessCreateInput = ProcessInput
 export interface ProcessOptions {
   datasets: { id: number; name: string; versions: { versionId: string; label: string }[] }[]
   rules: { code: string; label: string; description: string }[]

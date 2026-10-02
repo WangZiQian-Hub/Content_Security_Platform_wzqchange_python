@@ -1,7 +1,17 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -226,14 +236,69 @@ class Model(Base):
     )
 
 
-class DatasetRecord(Base):
-    """平台 MySQL 中保存的外部数据库原始数据行。"""
+class DatasetVersion(Base):
+    """数据集的一个版本。
 
-    __tablename__ = "dataset_records"
+    每成功接入一批数据就新增一条版本记录，版本记录只增不改，
+    因此"这个版本当时从哪来、进了多少条、占多少容量"都能回查。
+    datasets.version 只表示当前最新版本号，历史版本全部保存在这张表。
+    """
+
+    __tablename__ = "dataset_versions"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "version", name="uq_dataset_versions_dataset_version"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     dataset_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(100), nullable=False)
+    # 该版本由哪次接入任务产出；基线版本没有产出任务，为 NULL。
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # 这一版自己新增了多少 / 到这一版为止累计多少，两个都要留。
+    added_record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 这一版在库里实际落了多少条数据行，用于判断 has_snapshot。
+    stored_record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    storage_gb: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    source_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    connector_type: Mapped[str] = mapped_column(String(30), default="file", nullable=False)
+    languages: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    modalities: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # 这一版引用了哪些上传文件，保证原文件能对应到版本。
+    file_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="ready", nullable=False)
+    # 当前版本标记；数据集详情默认展示它，历史版本仍可单独查询。
+    is_current: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    # 是否是升级时回填出来的历史版本（不是接入任务的产出）。
+    is_backfilled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 这一版在库里是否留着完整数据；回填/仅元数据的版本为 False，
+    # 避免老数据被误认为"内容的完整快照"。
+    has_snapshot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai, nullable=False)
+
+
+class DatasetRecord(Base):
+    """平台 MySQL 中保存的某个数据集版本的数据行。
+
+    数据按版本分开存放：dataset_version_id 指向 dataset_versions，
+    同一数据集的不同版本互不覆盖，任何历史版本都能按版本 ID 查回明细。
+    dataset_id 保留为兼容字段，新写入同时填充。
+    """
+
+    __tablename__ = "dataset_records"
+    __table_args__ = (
+        Index("ix_dataset_records_version_dataset", "dataset_version_id", "dataset_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    dataset_version_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
     task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # 数据来自哪个上传文件（本地文件接入时写入）。
+    file_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_shanghai, nullable=False)
 

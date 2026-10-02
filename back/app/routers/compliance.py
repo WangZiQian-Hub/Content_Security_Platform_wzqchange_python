@@ -16,6 +16,7 @@ from app.models.tables import (
     ComplianceAudit,
     ComplianceEvidence,
     Dataset,
+    DatasetVersion,
     Model,
     ModelCall,
     ModelVersion,
@@ -71,6 +72,11 @@ def _graph(db: Session) -> tuple[list[dict], list[dict]]:
     for dataset in datasets.values():
         node_id = add_node(_node("dataset", dataset.id, dataset.version, dataset.name))
         known_dataset_versions.add((str(dataset.id), dataset.version))
+
+    # 数据集有版本历史后，引用"历史版本"的任务同样算已登记。
+    # 只看 datasets.version（当前版本）会把旧版本误判成"输入数据版本未在资源库登记"。
+    for version in db.scalars(select(DatasetVersion)).all():
+        known_dataset_versions.add((str(version.dataset_id), version.version))
 
     process_tasks = db.scalars(select(Task).where(Task.capability_code == "data_process")).all()
     for task in process_tasks:

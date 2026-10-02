@@ -119,10 +119,19 @@
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import SessionLocal
-from app.models.tables import Dataset, DatasetRecord, Metric, Model, Resource, Task, TrainingTask
+from app.models.tables import (
+    Dataset,
+    DatasetRecord,
+    DatasetVersion,
+    Metric,
+    Model,
+    Resource,
+    Task,
+    TrainingTask,
+)
 from app.services.resource_display import dataset_display_defaults, model_version_default
 
 
@@ -161,7 +170,7 @@ SOURCE_LABELS = {
 }
 
 
-def resource_to_dict(resource) -> dict[str, Any]:
+def resource_to_dict(resource, version_count: int | None = None) -> dict[str, Any]:
     metadata = dict(resource.metadata_json or {})
 
     modalities = [
@@ -171,7 +180,7 @@ def resource_to_dict(resource) -> dict[str, Any]:
 
     languages = metadata.get("languages", ["zh"])
 
-    return {
+    result = {
         "id": resource.id,
         "name": resource.name,
         "category": resource.category,
@@ -212,6 +221,13 @@ def resource_to_dict(resource) -> dict[str, Any]:
         ),
         "metadata": metadata,
     }
+
+    if version_count is not None:
+        # 数据集列表直接显示"共几个版本"，前端不必逐条再问版本接口。
+        result["version_count"] = int(version_count)
+        result["versionCount"] = int(version_count)
+
+    return result
 
 
 def metric_to_dict(metric: Metric) -> dict[str, Any]:
@@ -288,8 +304,25 @@ def list_resources(resource_type: str):
 
             resources = unique_resources
 
+        # 数据集附带版本数量；查不到时按 0 处理，不影响列表返回。
+        counts: dict[int, int] = {}
+        if resource_type == "datasets" and resources:
+            counts = dict(
+                db.execute(
+                    select(DatasetVersion.dataset_id, func.count(DatasetVersion.id))
+                    .where(
+                        DatasetVersion.dataset_id.in_(
+                            [resource.id for resource in resources]
+                        )
+                    )
+                    .group_by(DatasetVersion.dataset_id)
+                ).all()
+            )
+
         return [
-            resource_to_dict(resource)
+            resource_to_dict(resource, counts.get(resource.id))
+            if resource_type == "datasets"
+            else resource_to_dict(resource)
             for resource in resources
         ]
 
@@ -357,7 +390,14 @@ def create_dataset(data: dict[str, Any]):
         db.commit()
         db.refresh(dataset)
 
-        return resource_to_dict(dataset)
+        # 新建数据集立刻补一条初始版本记录，保证它一出生就有版本清单。
+        from app.services.versioning import ensure_dataset_versions
+
+        if ensure_dataset_versions(db, dataset.id):
+            db.commit()
+            db.refresh(dataset)
+
+        return resource_to_dict(dataset, 1)
 
 
 def find_metric(metric_code: str):
@@ -496,6 +536,8 @@ def delete_dataset(dataset_id: int) -> int:
         if governance_refs:
             raise ValueError("数据集已被数据治理任务引用，无法删除")
         db.query(DatasetRecord).filter(DatasetRecord.dataset_id == dataset_id).delete(synchronize_session=False)
+        # 版本记录属于数据集本身，删除数据集时一并清理，避免留下无主版本。
+        db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).delete(synchronize_session=False)
         for task in ingest_tasks:
             db.delete(task)
         db.delete(dataset)

@@ -15,15 +15,11 @@ describe('数据治理路由', () => {
   })
   it('其他页签保留配置，但直接地址返回数据处理', () => {
     const tabs = navigation.find((item) => item.path === '/data-governance')!.tabs
-    expect(tabs).toHaveLength(5)
+    expect(tabs).toHaveLength(4)
     expect(router.resolve('/data-governance/value-analysis').name).toBe('governance-value')
     expect(router.resolve('/data-governance/anomaly').name).toBe('governance-anomaly')
     expect(router.resolve('/data-governance/risk-classification').name).toBe('governance-risk')
-    for (const tab of tabs.filter((item) => !['process', 'value-analysis', 'anomaly', 'risk-classification'].includes(item.path))) {
-      expect(router.resolve(`/data-governance/${tab.path}`).matched.at(-1)?.redirect).toBe(
-        '/data-governance',
-      )
-    }
+    expect(tabs.some((item) => item.title === '数据质量评估')).toBe(false)
   })
   it('数据资源和模型训推路由继续可用', () => {
     expect(router.resolve('/data-resource/datasets').name).toBe('resource-datasets')

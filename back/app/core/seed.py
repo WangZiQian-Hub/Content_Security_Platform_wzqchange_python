@@ -6,6 +6,8 @@ from sqlalchemy import inspect, select, text
 from app.core.database import SessionLocal, engine
 from app.models.tables import (
     Dataset,
+    DatasetRecord,
+    DatasetVersion,
     Metric,
     Model,
     ModelVersion,
@@ -19,6 +21,11 @@ from app.models.tables import (
     EvaluationTask,
     EvaluationRun,
     EvaluationEvent,
+)
+from app.services.versioning import (
+    count_version_records,
+    ensure_dataset_versions,
+    version_has_snapshot,
 )
 from app.services.resource_display import (
     dataset_display_defaults,
@@ -334,6 +341,171 @@ def ensure_dataset_source_type_column():
             END
             WHERE source_type = 'business'
         """))
+
+
+def ensure_dataset_version_columns():
+    """为已有数据库补上版本表相关的列。
+
+    要处理两件事：
+    1. dataset_records 原来只有 dataset_id，没有版本列 → 补 dataset_version_id、file_id。
+    2. dataset_versions 如果是更早的中间版本建的（只有 record_count），
+       把 record_count 改名为 added_record_count，并补齐其余新列。
+
+    只加列 / 改名，不删数据；可以重复执行。
+    """
+    inspector = inspect(engine)
+
+    if inspector.has_table("dataset_records"):
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("dataset_records")
+        }
+        additions = {
+            "dataset_version_id": "INT NULL",
+            "file_id": "VARCHAR(64) NULL",
+        }
+        with engine.begin() as connection:
+            for name, definition in additions.items():
+                if name not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE dataset_records ADD COLUMN {name} {definition}")
+                    )
+            if "dataset_version_id" not in columns:
+                # 索引名与 ORM 声明保持一致，新建库和升级库最终结构相同。
+                connection.execute(text(
+                    "ALTER TABLE dataset_records "
+                    "ADD INDEX ix_dataset_records_dataset_version_id (dataset_version_id)"
+                ))
+                connection.execute(text(
+                    "ALTER TABLE dataset_records "
+                    "ADD INDEX ix_dataset_records_version_dataset (dataset_version_id, dataset_id)"
+                ))
+
+    if not inspector.has_table("dataset_versions"):
+        return
+
+    with engine.begin() as connection:
+        version_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns("dataset_versions")
+        }
+
+        # 更早的中间版本用的是 record_count，语义等于"这一版新增"。
+        if "record_count" in version_columns and "added_record_count" not in version_columns:
+            connection.execute(text(
+                "ALTER TABLE dataset_versions "
+                "CHANGE COLUMN record_count added_record_count INT NOT NULL DEFAULT 0"
+            ))
+            version_columns.discard("record_count")
+            version_columns.add("added_record_count")
+
+        version_additions = {
+            "added_record_count": "INT NOT NULL DEFAULT 0",
+            "total_record_count": "INT NOT NULL DEFAULT 0",
+            "stored_record_count": "INT NOT NULL DEFAULT 0",
+            "file_ids": "JSON NULL",
+            "is_backfilled": "TINYINT(1) NOT NULL DEFAULT 0",
+            "has_snapshot": "TINYINT(1) NOT NULL DEFAULT 0",
+        }
+        for name, definition in version_additions.items():
+            if name not in version_columns:
+                connection.execute(
+                    text(f"ALTER TABLE dataset_versions ADD COLUMN {name} {definition}")
+                )
+
+        # 补齐历史行：新增数就是原来的记录数，累计数先按新增数兜底。
+        connection.execute(text(
+            "UPDATE dataset_versions SET total_record_count = added_record_count "
+            "WHERE total_record_count IS NULL OR total_record_count = 0"
+        ))
+        connection.execute(text(
+            "UPDATE dataset_versions SET file_ids = JSON_ARRAY() WHERE file_ids IS NULL"
+        ))
+        # 早期版本记录没有回填标记：有产出任务的是真接入产物，没有任务的是补录。
+        connection.execute(text(
+            "UPDATE dataset_versions SET is_backfilled = 1 WHERE task_id IS NULL"
+        ))
+
+
+def mark_dataset_version_snapshots():
+    """按实际落库的数据行数，修正每个版本的 stored_record_count 与 has_snapshot。
+
+    只有库里真的存着这一版该有的行数，才算"这一版留有数据"；
+    老数据回填的版本可能一行明细都没有，会被标记成 has_snapshot=False，
+    这样前端能一眼看出"它只是归到该版本名下，不是内容快照"。
+    """
+    with SessionLocal() as db:
+        versions = db.scalars(select(DatasetVersion)).all()
+        changed = 0
+        for version in versions:
+            stored = count_version_records(db, version.id)
+            snapshot = version_has_snapshot(db, version)
+            if int(version.stored_record_count or 0) != stored or bool(version.has_snapshot) != snapshot:
+                version.stored_record_count = stored
+                version.has_snapshot = snapshot
+                changed += 1
+        if changed:
+            db.commit()
+            print(f"已修正 {changed} 条版本记录的数据快照标记")
+
+
+def migrate_dataset_record_versions():
+    """把升级前接入的数据行挂到各数据集最早的那个版本上。
+
+    升级前的数据行没有版本列，也无法还原它当年属于哪个版本；
+    统一归到该数据集的第一个版本（通常是 v1.0.0），保证一行都不丢。
+    """
+    with SessionLocal() as db:
+        dataset_ids = list(db.scalars(
+            select(DatasetRecord.dataset_id)
+            .where(DatasetRecord.dataset_version_id.is_(None))
+            .distinct()
+        ).all())
+
+        repaired = 0
+
+        for dataset_id in dataset_ids:
+            version_id = db.scalar(
+                select(DatasetVersion.id)
+                .where(DatasetVersion.dataset_id == dataset_id)
+                .order_by(DatasetVersion.id.asc())
+                .limit(1)
+            )
+
+            if version_id is None:
+                continue
+
+            result = db.execute(
+                text(
+                    "UPDATE dataset_records SET dataset_version_id = :version_id "
+                    "WHERE dataset_id = :dataset_id AND dataset_version_id IS NULL"
+                ),
+                {"version_id": version_id, "dataset_id": dataset_id},
+            )
+            repaired += result.rowcount or 0
+
+        if repaired:
+            db.commit()
+            print(f"已把 {repaired} 条历史数据行归入对应版本")
+
+
+def ensure_dataset_versions_ready():
+    """启动时执行的数据集版本迁移总入口。
+
+    顺序不能颠倒：先补列（能写），再补版本记录（有版本可挂），
+    然后回填历史数据行（挂到版本上），最后按真实行数修正快照标记。
+    可以重复执行，不会重复写入。
+    """
+    ensure_dataset_version_columns()
+
+    with SessionLocal() as db:
+        created = ensure_dataset_versions(db)
+        if created:
+            db.commit()
+            print(f"已为 {created} 个数据集补录初始版本记录")
+
+    migrate_dataset_record_versions()
+    mark_dataset_version_snapshots()
 
 
 def migrate_legacy_resources():
@@ -662,6 +834,9 @@ def seed_initial_data():
                     changed = True
             if changed:
                 dataset.metadata_json = metadata
+
+        # 每个数据集都必须有第一个版本记录，否则版本清单接口会返回空列表。
+        ensure_dataset_versions(db)
 
         model_seeds = [
             {

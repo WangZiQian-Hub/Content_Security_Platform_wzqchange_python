@@ -26,6 +26,7 @@ from app.routers import (
 
 from app.core.seed import (
     ensure_dataset_source_type_column,
+    ensure_dataset_versions_ready,
     ensure_resource_display_values,
     ensure_ingest_demo_tasks,
     ensure_process_demo_tasks,
@@ -77,6 +78,9 @@ async def lifespan(app: FastAPI):
     # 迁移旧的统一资源表，并确保独立资源表有初始数据
     migrate_legacy_resources()
     seed_initial_data()
+    # 数据集版本迁移必须在演示数据集写入之后：它给每个数据集补第一个版本
+    # 记录，并把升级前遗留的数据行挂到对应版本上（可重复执行，只生效一次）。
+    ensure_dataset_versions_ready()
     ensure_evaluation_metric_columns()
     ensure_evaluation_metrics()
     ensure_evaluation_tasks()

@@ -24,6 +24,7 @@ from app.services.resource_display import (
     task_version_default,
 )
 from app.services.database_ingest import read_mysql_rows, save_dataset_rows
+from app.services.versioning import create_dataset_version
 from app.services.file_ingest import (
     assign_sample_ids,
     map_field_name,
@@ -447,14 +448,52 @@ def run_mock_task(
                     record_count=statistics["inserted_count"],
                 )
                 dataset_name = dataset.name
+
                 existing_record_count = db.scalar(
                     select(func.count()).select_from(DatasetRecord).where(DatasetRecord.dataset_id == dataset.id)
                 ) or 0
                 payloads = assign_sample_ids(storage_rows, dataset.id, int(existing_record_count) + 1)
+
+                # 本次接入生成一个新版本。版本记录只增不改，所以数据集有多少个
+                # 版本、每个版本当时从哪来、进了多少条数据，之后都能回查。
+                # 语义：datasets.version 表示"任务读的是哪一版"（输入版本），
+                # 版本表这条件录表示"这一版由哪个任务产出"（产出关系），两个值不同是正确的。
+                version = create_dataset_version(
+                    db,
+                    dataset.id,
+                    task_id=task_id,
+                    description=f"由数据接入任务产出：{request.name or task_id}",
+                    added_record_count=len(payloads),
+                    total_record_count=int(existing_record_count) + len(payloads),
+                    stored_record_count=len(payloads),
+                    storage_gb=storage_gb,
+                    source_name=source_name,
+                    connector_type=str(connector_type or "file"),
+                    languages=list(input_data.get("languages") or []),
+                    modalities=list(input_data.get("modalities") or []),
+                    file_ids=[
+                        item
+                        for item in (input_data.get("files") or [])
+                        if isinstance(item, str)
+                    ],
+                    status="ready",
+                )
+
                 if payloads:
-                    save_dataset_rows(db, dataset_id=dataset.id, task_id=task_id, rows=payloads)
+                    # 每条数据行都挂上本次的版本，历史版本的数据互不覆盖。
+                    save_dataset_rows(
+                        db,
+                        dataset_id=dataset.id,
+                        task_id=task_id,
+                        rows=payloads,
+                        dataset_version_id=version.id,
+                    )
                 result["dataset_id"] = dataset.id
                 result["dataset_name"] = dataset.name
+                # dataset_version 是任务读的输入版本，produced_version 是本次产出的版本。
+                result["produced_version"] = version.version
+                result["produced_version_id"] = version.id
+                result["produced_record_count"] = len(payloads)
 
             # 评估能力额外读取指标信息
             if request.capability_code == "evaluation":

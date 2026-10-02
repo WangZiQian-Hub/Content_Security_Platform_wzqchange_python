@@ -90,11 +90,27 @@ def read_mysql_rows(input_data: dict[str, Any]) -> tuple[list[dict[str, Any]], i
     return rows, byte_count, source_kind
 
 
-def save_dataset_rows(db: Session, *, dataset_id: int, task_id: str, rows: list[dict[str, Any]]) -> None:
-    """将外部 MySQL 的每一行写入平台自身的 MySQL。"""
+def save_dataset_rows(
+    db: Session,
+    *,
+    dataset_id: int,
+    task_id: str,
+    rows: list[dict[str, Any]],
+    dataset_version_id: int | None = None,
+) -> None:
+    """将接入的每一行写入平台自身的 MySQL，并记录它属于哪个版本。
+
+    每条记录都带 dataset_version_id：这是"所有版本的数据都存下来、
+    并且查得出来"的关键；缺了它就只能看到总数，看不到版本明细。
+    """
     for start in range(0, len(rows), FETCH_SIZE):
         db.add_all(
-            DatasetRecord(dataset_id=dataset_id, task_id=task_id, payload=row)
+            DatasetRecord(
+                dataset_id=dataset_id,
+                dataset_version_id=dataset_version_id,
+                task_id=task_id,
+                payload=row,
+            )
             for row in rows[start : start + FETCH_SIZE]
         )
         db.flush()
