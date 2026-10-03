@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const backend = vi.hoisted(() => ({ isMock: true, request: vi.fn() }))
 vi.mock('./request', () => backend)
+vi.mock('./governance-llm', () => ({ isGovernanceLlm: false, llmRequest: vi.fn() }))
 import * as api from './data-anomaly'
 import { anomalyMock, publishedSnapshots } from '../mock/data-anomaly'
 import { resourceSamples } from '../mock/resource-samples'
@@ -107,7 +108,7 @@ describe('异常治理完整数据与事务工作流', () => {
     })
     await api.startAnomaly(scope)
     expect(backend.request).toHaveBeenLastCalledWith({
-      url: '/tasks',
+      url: '/data-governance/anomaly-tasks',
       method: 'POST',
       data: { kind: 'governance-anomaly', name: '异常数据检测', input: scope },
     })

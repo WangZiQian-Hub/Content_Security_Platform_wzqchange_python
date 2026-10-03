@@ -1,4 +1,5 @@
-import { isMock, request } from './request'
+import { isMock as businessMock, request as businessRequest } from './request'
+import { isGovernanceLlm, llmRequest } from './governance-llm'
 import { getGovernanceResources } from './governance-resources'
 import { latestDemoResult, savedDemoResult, valueOptions } from '../mock/data-value'
 import { getResourceSamples } from './data-resource'
@@ -12,10 +13,14 @@ import type {
   ValueTask,
 } from '../types/data-value'
 import type { PageResult } from '../types'
+// 模型模式下三类分析整体改走本项目模型服务，不回落模拟结果；其余情况沿用业务请求层原来的判定。
+// 这里保留为取值函数而不是常量：业务请求层的 isMock 是模块活绑定，用例会在运行过程中切换它。
+const useMock = () => businessMock && !isGovernanceLlm
+const request: typeof businessRequest = isGovernanceLlm ? llmRequest : businessRequest
 
 export async function getValueOptions(): Promise<ValueOptions> {
   const [options, datasets] = await Promise.all([
-    isMock
+    useMock()
       ? structuredClone(valueOptions)
       : request<ValueOptions>({ url: '/data-governance/options', params: { kind: VALUE_KIND } }),
     getGovernanceResources(),
@@ -23,12 +28,12 @@ export async function getValueOptions(): Promise<ValueOptions> {
   return { ...options, datasets }
 }
 export async function getLatestValueResult(scope: ValueScope): Promise<ValueResult | null> {
-  return isMock
+  return useMock()
     ? latestDemoResult(scope)
     : request({ url: '/data-governance/value-results/latest', params: scope })
 }
 export async function getValueResult(id: string): Promise<ValueResult> {
-  return isMock
+  return useMock()
     ? savedDemoResult(id).result
     : request({ url: `/data-governance/value-results/${encodeURIComponent(id)}` })
 }
@@ -36,7 +41,7 @@ export async function listValueSamples(
   id: string,
   query: ValueSampleQuery,
 ): Promise<PageResult<ValueSample>> {
-  if (!isMock) {
+  if (!useMock()) {
     const [result, page] = await Promise.all([
       getValueResult(id),
       request<PageResult<ValueSample>>({
@@ -94,7 +99,7 @@ export async function listValueSamples(
   }
 }
 export async function listValueTasks(scope: ValueScope): Promise<PageResult<ValueTask>> {
-  if (!isMock)
+  if (!useMock())
     return request({ url: '/tasks', params: { kind: VALUE_KIND, ...scope, page: 1, pageSize: 20 } })
   const result = latestDemoResult(scope)
   return {

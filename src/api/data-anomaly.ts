@@ -1,4 +1,5 @@
-import { isMock, request } from './request'
+import { isMock as businessMock, request as businessRequest } from './request'
+import { isGovernanceLlm, llmRequest } from './governance-llm'
 import { getGovernanceResources } from './governance-resources'
 import { anomalyMock } from '../mock/data-anomaly'
 import { getResourceSamples } from './data-resource'
@@ -16,6 +17,10 @@ import {
   type Published,
 } from '../types/data-anomaly'
 import type { PageResult } from '../types'
+// 模型模式下三类分析整体改走本项目模型服务，不回落模拟结果；其余情况沿用业务请求层原来的判定。
+// 这里保留为取值函数而不是常量：业务请求层的 isMock 是模块活绑定，用例会在运行过程中切换它。
+const useMock = () => businessMock && !isGovernanceLlm
+const request: typeof businessRequest = isGovernanceLlm ? llmRequest : businessRequest
 const base = '/data-governance/anomaly-results'
 const kind = ANOMALY_KIND
 const get = <T>(url: string, params = {}) => request<T>({ url, params: { kind, ...params } })
@@ -23,19 +28,19 @@ const post = <T>(url: string, data = {}) =>
   request<T>({ url, method: 'POST', data: { kind, ...data } })
 export async function getAnomalyOptions(): Promise<Options> {
   const [options, datasets] = await Promise.all([
-    isMock ? anomalyMock.options() : get<Options>('/data-governance/options'),
+    useMock() ? anomalyMock.options() : get<Options>('/data-governance/options'),
     getGovernanceResources(),
   ])
   return { ...options, datasets }
 }
 export const getAnomalyOverview = async (): Promise<Overview> =>
-  isMock ? anomalyMock.overview() : get('/overview')
+  useMock() ? anomalyMock.overview() : get('/overview')
 export const getLatestAnomaly = async (scope: Scope): Promise<Result | null> =>
-  isMock ? anomalyMock.latest(scope) : get(`${base}/latest`, scope)
+  useMock() ? anomalyMock.latest(scope) : get(`${base}/latest`, scope)
 export const getAnomalyHistory = async (scope: Scope): Promise<Result[]> =>
-  isMock ? anomalyMock.history(scope) : get(base, scope)
+  useMock() ? anomalyMock.history(scope) : get(base, scope)
 export const getAnomalyResult = async (id: string): Promise<Result> =>
-  isMock ? anomalyMock.result(id) : get(`${base}/${encodeURIComponent(id)}`)
+  useMock() ? anomalyMock.result(id) : get(`${base}/${encodeURIComponent(id)}`)
 async function validateResources(id: string, rows: Sample[]) {
   const result = await getAnomalyResult(id)
   const resources = await getResourceSamples(
@@ -56,14 +61,14 @@ async function validateResources(id: string, rows: Sample[]) {
   return rows
 }
 export async function listAnomalySamples(id: string, query: Query): Promise<PageResult<Sample>> {
-  const page = isMock
+  const page = useMock()
     ? anomalyMock.samples(id, query)
     : await get<PageResult<Sample>>(`${base}/${encodeURIComponent(id)}/samples`, query)
   await validateResources(id, page.items)
   return page
 }
 export async function getAnomalySample(id: string, sampleId: string): Promise<Sample> {
-  const sample = isMock
+  const sample = useMock()
     ? anomalyMock.detail(id, sampleId)
     : await get<Sample>(`${base}/${encodeURIComponent(id)}/samples/${encodeURIComponent(sampleId)}`)
   await validateResources(id, [sample])
@@ -76,33 +81,33 @@ export const updateCandidate = async (
   candidateId?: string,
   inputSampleRevisionId?: string,
 ): Promise<Sample> =>
-  isMock
+  useMock()
     ? anomalyMock.mutate(id, sampleId, action, candidateId, inputSampleRevisionId)
     : post(
         `${base}/${encodeURIComponent(id)}/samples/${encodeURIComponent(sampleId)}/candidates/${action}`,
         { candidateId, inputSampleRevisionId },
       )
 export const startAnomaly = async (input: Scope): Promise<Task> =>
-  isMock
+  useMock()
     ? anomalyMock.start(input)
     : post('/data-governance/anomaly-tasks', { name: '异常数据检测', input })
 export const getAnomalyTask = async (id: string): Promise<Task> =>
-  isMock
+  useMock()
     ? anomalyMock.task(id)
     : get(`/data-governance/anomaly-tasks/${encodeURIComponent(id)}`)
 export const getAnomalyChangeSet = async (scope: Scope): Promise<ChangeSet> =>
-  isMock ? anomalyMock.changeSet(scope) : get('/data-governance/change-sets/current', scope)
+  useMock() ? anomalyMock.changeSet(scope) : get('/data-governance/change-sets/current', scope)
 export const removeAnomalyEntry = async (scope: Scope, candidateId: string): Promise<ChangeSet> =>
-  isMock
+  useMock()
     ? anomalyMock.remove(scope, candidateId)
     : post('/data-governance/change-sets/remove', { ...scope, candidateId })
 export const checkAnomalyVersion = async (scope: Scope): Promise<VersionCheck> =>
-  isMock ? anomalyMock.check(scope) : post('/data-governance/change-sets/validate', scope)
+  useMock() ? anomalyMock.check(scope) : post('/data-governance/change-sets/validate', scope)
 export const publishAnomalyVersion = async (
   scope: Scope,
   validationToken: string,
 ): Promise<Published> =>
-  isMock
+  useMock()
     ? anomalyMock.publish(scope, validationToken)
     : post('/data-governance/change-sets/generate-version', { ...scope, validationToken })
 export async function exportAnomalySamples(id: string, query: Query) {

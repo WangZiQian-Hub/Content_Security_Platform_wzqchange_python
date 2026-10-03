@@ -10,6 +10,7 @@ import AnomalyOverview from './components/AnomalyOverview.vue'
 import RiskOverview from './components/RiskOverview.vue'
 import ProcessOverview from './components/ProcessOverview.vue'
 import ValueOverview from './components/ValueOverview.vue'
+import GovernanceTokenBar from './components/GovernanceTokenBar.vue'
 const riskRevision = ref(0)
 const anomalyRevision = ref(0)
 const route = useRoute()
@@ -18,6 +19,7 @@ const icons = ['Coin', 'TrendCharts', 'Shield', 'WarningFilled', 'PieChart']
 </script>
 <template>
   <div class="governance-workspace">
+    <GovernanceTokenBar />
     <AnomalyOverview v-if="route.name === 'governance-anomaly'" :key="anomalyRevision" />
     <RiskOverview v-else-if="route.name === 'governance-risk'" :key="riskRevision" />
     <ProcessOverview v-else-if="route.name === 'governance-process'" />

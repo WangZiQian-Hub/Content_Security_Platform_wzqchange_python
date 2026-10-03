@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const backend = vi.hoisted(() => ({ isMock: true, request: vi.fn() }))
 vi.mock('./request', () => backend)
+vi.mock('./governance-llm', () => ({ isGovernanceLlm: false, llmRequest: vi.fn() }))
 import {
   createValueTask,
   getLatestValueResult,
